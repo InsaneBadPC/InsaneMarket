@@ -130,7 +130,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun applyInstalledState(list: MutableList<AppEntry>, installed: Map<String, InstalledApps.InstalledInfo>) {
+    private fun applyInstalledState(list: MutableList<AppEntry>, installed: Map<String, cz.insanebadpc.insanemarket.util.InstalledInfo>) {
         for (e in list) {
             val mapped = state.packageForRepo(e.repoFullName) ?: e.manifestPackage
             val pkg = InstalledApps.match(e.manifestPackage, mapped, e.repoName, installed)
