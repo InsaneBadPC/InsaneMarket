@@ -123,7 +123,7 @@ class MainActivity : AppCompatActivity() {
     private fun refreshInstalledState() {
         lifecycleScope.launch {
             val installed = withContext(Dispatchers.IO) { InstalledApps.byPackage(this@MainActivity) }
-            val list = allEntries.map { it.copy() }
+            val list = allEntries.map { it.copy() }.toMutableList()
             applyInstalledState(list, installed)
             allEntries = list
             render()
