@@ -64,7 +64,7 @@ class MainActivity : AppCompatActivity() {
                     list
                 }
                 adapter.submit(entries)
-                b.statusText.text = "InsaneBadPC: ${entries.size} repozitářů, ${entries.count { it.apkUrl != null }} s APK"
+                b.statusText.text = if (entries.isEmpty()) "Žádné aplikace s APK release." else "Moje aplikace: ${entries.size}"
             } catch (e: Exception) {
                 b.statusText.text = "Chyba: ${e.message}"
                 Toast.makeText(this@MainActivity, e.message ?: "Chyba", Toast.LENGTH_LONG).show()

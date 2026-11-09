@@ -17,27 +17,12 @@ class GitHubMarket(private val owner: String = "InsaneBadPC", private val tokenP
             if (r.optBoolean("archived") || r.optBoolean("fork") || r.optBoolean("private")) continue
             val name = r.optString("name")
             val full = r.optString("full_name")
-            val entry = fetchLatestRelease(r, name, full) ?: AppEntry(
-                repoName = name,
-                repoFullName = full,
-                repoUrl = r.optString("html_url"),
-                displayName = prettify(name),
-                description = r.optString("description").ifBlank { "Repozitář bez popisu." },
-                language = r.optString("language").ifBlank { null },
-                latestTag = null,
-                latestName = null,
-                apkUrl = null,
-                assetName = null,
-                publishedAt = r.optString("pushed_at"),
-                releaseNotes = null,
-                status = "Žádný release"
-            )
-            out += entry
+            fetchAppRelease(r, name, full)?.let(out::add)
         }
-        return out.sortedWith(compareByDescending<AppEntry> { it.apkUrl != null }.thenByDescending { it.publishedAt ?: "" })
+        return out.sortedByDescending { it.publishedAt ?: "" }
     }
 
-    private fun fetchLatestRelease(repo: JSONObject, name: String, full: String): AppEntry? {
+    private fun fetchAppRelease(repo: JSONObject, name: String, full: String): AppEntry? {
         val rel = try { getJson("https://api.github.com/repos/$full/releases/latest") } catch (_: Exception) { null } ?: return null
         val assets = rel.optJSONArray("assets") ?: JSONArray()
         var apkUrl: String? = null; var assetName: String? = null
@@ -50,6 +35,7 @@ class GitHubMarket(private val owner: String = "InsaneBadPC", private val tokenP
                 break
             }
         }
+        if (apkUrl == null) return null
         val desc = rel.optString("body").ifBlank { repo.optString("description") }.ifBlank { "Aplikace z GitHub release." }
         return AppEntry(
             repoName = name,
@@ -64,7 +50,7 @@ class GitHubMarket(private val owner: String = "InsaneBadPC", private val tokenP
             assetName = assetName,
             publishedAt = rel.optString("published_at").ifBlank { rel.optString("created_at") },
             releaseNotes = rel.optString("body").ifBlank { null },
-            status = if (apkUrl != null) "Release s APK" else "Release bez APK"
+            status = "Dostupná aplikace"
         )
     }
 

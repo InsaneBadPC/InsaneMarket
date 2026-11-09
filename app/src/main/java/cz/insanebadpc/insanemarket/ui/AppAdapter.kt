@@ -33,17 +33,15 @@ class AppAdapter(
         }
         holder.b.desc.text = item.description
         holder.b.status.text = when {
-            item.apkUrl == null -> "Repozitář nemá APK v latest release."
             item.hasUpdate -> "Nová verze dostupná."
             item.installedVersion != null -> "Nainstalováno."
-            else -> "Připraveno k instalaci."
+            else -> "Připraveno ke stažení."
         }
         holder.b.action.isEnabled = item.apkUrl != null
         holder.b.action.text = when {
-            item.apkUrl == null -> "Bez APK"
             item.hasUpdate -> "Aktualizovat"
             item.installedVersion != null -> "Reinstalovat"
-            else -> "Instalovat"
+            else -> "Stáhnout a instalovat"
         }
         holder.b.action.setOnClickListener { onAction(item) }
         holder.b.edit.setOnClickListener { onEdit(item) }
