@@ -1,7 +1,6 @@
 package cz.insanebadpc.insanemarket.util
 
 import android.content.Context
-import android.content.pm.PackageInfo
 import android.os.Build
 
 data class InstalledInfo(val packageName: String, val versionName: String?, val versionCode: Long)
@@ -20,9 +19,11 @@ object InstalledApps {
 
     fun guessPackage(repoName: String, installed: Map<String, InstalledInfo>): InstalledInfo? {
         val n = repoName.lowercase().replace("[^a-z0-9]".toRegex(), "")
+        if (n.isBlank()) return null
         return installed.values.firstOrNull {
             val p = it.packageName.lowercase()
-            p.contains(n) || n.contains(p.substringAfterLast('.'))
+            val last = p.substringAfterLast('.').replace("[^a-z0-9]".toRegex(), "")
+            p.contains(n) || n.contains(last) || last.contains(n)
         }
     }
 }

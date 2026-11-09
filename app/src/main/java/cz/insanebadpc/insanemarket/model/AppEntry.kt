@@ -11,11 +11,22 @@ data class AppEntry(
     val latestName: String?,
     val apkUrl: String?,
     val assetName: String?,
+    val assetSize: Long?,
     val publishedAt: String?,
     val releaseNotes: String?,
     var installedVersion: String? = null,
     var installedVersionCode: Long? = null,
     var packageName: String? = null,
     var hasUpdate: Boolean = false,
+    var isInstalled: Boolean = false,
+    var isDownloading: Boolean = false,
+    var downloadProgress: Int = 0,
     var status: String = ""
-)
+) {
+    fun matches(query: String): Boolean {
+        if (query.isBlank()) return true
+        val q = query.lowercase()
+        return listOfNotNull(displayName, repoName, description, latestTag, packageName, language)
+            .any { it.lowercase().contains(q) }
+    }
+}

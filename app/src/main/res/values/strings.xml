@@ -1,14 +1,28 @@
 <resources>
     <string name="app_name">InsaneMarket</string>
+    <string name="subtitle">Moje aplikace z GitHubu</string>
     <string name="refresh">Obnovit</string>
+    <string name="settings">Nastavení</string>
+    <string name="about">O aplikaci</string>
     <string name="edit">Upravit</string>
-    <string name="install">Instalovat</string>
-    <string name="update">Aktualizovat</string>
+    <string name="details">Detail</string>
     <string name="open">Otevřít</string>
+    <string name="download_install">Stáhnout a instalovat</string>
+    <string name="update">Aktualizovat</string>
+    <string name="reinstall">Reinstalovat</string>
     <string name="save">Uložit</string>
     <string name="cancel">Zrušit</string>
-    <string name="name_label">Název</string>
+    <string name="name_label">Zobrazovaný název</string>
     <string name="desc_label">Popis</string>
-    <string name="scanning">Prohledávám GitHub InsaneBadPC…</string>
-    <string name="no_apk">Bez APK release</string>
+    <string name="token_label">GitHub token (volitelné)</string>
+    <string name="owner_label">GitHub účet</string>
+    <string name="scanning">Načítám aplikace z GitHubu…</string>
+    <string name="search_hint">Hledat aplikaci</string>
+    <string name="filter_all">Vše</string>
+    <string name="filter_updates">Aktualizace</string>
+    <string name="filter_installed">Nainstalované</string>
+    <string name="empty_title">Žádné aplikace</string>
+    <string name="empty_body">V účtu nejsou teď žádné veřejné repozitáře s APK v latest release.</string>
+    <string name="error_title">Načítání selhalo</string>
+    <string name="about_body">InsaneMarket zobrazuje jen aplikace z veřejných GitHub repozitářů vybraného účtu, které mají v latest release soubor APK. Při spuštění se seznam obnoví, aplikace lze stáhnout, instalovat, aktualizovat a ručně upravit název/popis.</string>
 </resources>

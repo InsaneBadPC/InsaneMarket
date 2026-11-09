@@ -1,3 +1,11 @@
 <resources>
-    <color name="ic_launcher_background">#121212</color>
+    <color name="ic_launcher_background">#0D1117</color>
+    <color name="market_primary">#2F81F7</color>
+    <color name="market_surface">#0D1117</color>
+    <color name="market_card">#161B22</color>
+    <color name="market_text">#E6EDF3</color>
+    <color name="market_muted">#8B949E</color>
+    <color name="market_success">#3FB950</color>
+    <color name="market_warning">#D29922</color>
+    <color name="market_border">#30363D</color>
 </resources>
