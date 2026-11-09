@@ -16,4 +16,9 @@ class AppStateStore(context: Context) {
 
     fun lastScanTime(): Long = prefs.getLong("last_scan", 0L)
     fun setLastScanTime(value: Long) { prefs.edit().putLong("last_scan", value).apply() }
+
+    fun packageForRepo(repoFullName: String): String? = prefs.getString("pkg:$repoFullName", null)?.ifBlank { null }
+    fun setPackageForRepo(repoFullName: String, packageName: String?) {
+        if (!packageName.isNullOrBlank()) prefs.edit().putString("pkg:$repoFullName", packageName.trim()).apply()
+    }
 }

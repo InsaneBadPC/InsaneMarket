@@ -8,4 +8,5 @@
     <com.google.android.material.textfield.TextInputLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="12dp">
         <com.google.android.material.textfield.TextInputEditText android:id="@+id/editToken" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="@string/token_label" android:inputType="textPassword"/>
     </com.google.android.material.textfield.TextInputLayout>
+    <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:text="@string/token_help" android:textColor="@color/market_muted" android:textSize="13sp"/>
 </LinearLayout>

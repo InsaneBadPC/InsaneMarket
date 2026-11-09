@@ -17,7 +17,9 @@ object InstalledApps {
         }
     }
 
-    fun guessPackage(repoName: String, installed: Map<String, InstalledInfo>): InstalledInfo? {
+    fun match(entryPackage: String?, mappedPackage: String?, repoName: String, installed: Map<String, InstalledInfo>): InstalledInfo? {
+        entryPackage?.let { installed[it] }?.let { return it }
+        mappedPackage?.let { installed[it] }?.let { return it }
         val n = repoName.lowercase().replace("[^a-z0-9]".toRegex(), "")
         if (n.isBlank()) return null
         return installed.values.firstOrNull {

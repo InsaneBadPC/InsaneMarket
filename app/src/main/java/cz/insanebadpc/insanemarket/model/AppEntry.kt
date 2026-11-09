@@ -14,6 +14,7 @@ data class AppEntry(
     val assetSize: Long?,
     val publishedAt: String?,
     val releaseNotes: String?,
+    val manifestPackage: String? = null,
     var installedVersion: String? = null,
     var installedVersionCode: Long? = null,
     var packageName: String? = null,
@@ -26,7 +27,7 @@ data class AppEntry(
     fun matches(query: String): Boolean {
         if (query.isBlank()) return true
         val q = query.lowercase()
-        return listOfNotNull(displayName, repoName, description, latestTag, packageName, language)
+        return listOfNotNull(displayName, repoName, description, latestTag, packageName, manifestPackage, language)
             .any { it.lowercase().contains(q) }
     }
 }

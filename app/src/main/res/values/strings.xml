@@ -25,4 +25,8 @@
     <string name="empty_body">V účtu nejsou teď žádné veřejné repozitáře s APK v latest release.</string>
     <string name="error_title">Načítání selhalo</string>
     <string name="about_body">InsaneMarket zobrazuje jen aplikace z veřejných GitHub repozitářů vybraného účtu, které mají v latest release soubor APK. Při spuštění se seznam obnoví, aplikace lze stáhnout, instalovat, aktualizovat a ručně upravit název/popis.</string>
+    <string name="install_permission_title">Povolit instalaci</string>
+    <string name="install_permission_body">InsaneMarket potřebuje povolení instalovat aplikace z tohoto zdroje. Po povolení se vrať zpět a spusť instalaci znovu.</string>
+    <string name="open_settings">Otevřít nastavení</string>
+    <string name="token_help">Volitelný GitHub token zvýší API limit (užitečné při více aplikacích). Token se ukládá jen lokálně v zařízení.</string>
 </resources>

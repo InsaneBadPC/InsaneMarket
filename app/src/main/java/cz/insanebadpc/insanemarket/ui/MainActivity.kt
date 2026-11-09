@@ -23,6 +23,7 @@ import cz.insanebadpc.insanemarket.util.LocalOverrides
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -38,6 +39,7 @@ class MainActivity : AppCompatActivity() {
     private var allEntries = listOf<AppEntry>()
     private var filter = Filter.ALL
     private var query = ""
+    private var pendingInstall: Pair<AppEntry, File>? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -63,6 +65,17 @@ class MainActivity : AppCompatActivity() {
         scan()
     }
 
+    override fun onResume() {
+        super.onResume()
+        pendingInstall?.let { (entry, file) ->
+            if (ApkInstaller.canInstall(this) && file.exists()) {
+                pendingInstall = null
+                launchInstall(entry, file)
+            }
+        }
+        if (::market.isInitialized && allEntries.isNotEmpty()) refreshInstalledState()
+    }
+
     override fun onCreateOptionsMenu(menu: Menu): Boolean { menuInflater.inflate(R.menu.main_menu, menu); return true }
     override fun onOptionsItemSelected(item: MenuItem): Boolean = when (item.itemId) {
         R.id.action_refresh -> { scan(); true }
@@ -83,32 +96,58 @@ class MainActivity : AppCompatActivity() {
                     market.setOwner(state.owner())
                     val list = market.scan().toMutableList()
                     overrides.applyTo(list)
-                    for (e in list) {
-                        val pkg = InstalledApps.guessPackage(e.repoName, installed)
-                        if (pkg != null) {
-                            e.packageName = pkg.packageName
-                            e.installedVersion = pkg.versionName ?: pkg.versionCode.toString()
-                            e.installedVersionCode = pkg.versionCode
-                            e.isInstalled = true
-                        }
-                        val seen = state.lastSeenTag(e.repoFullName)
-                        e.hasUpdate = if (e.isInstalled) !e.latestTag.isNullOrBlank() && seen != null && seen != e.latestTag else false
-                        if (seen == null && !e.latestTag.isNullOrBlank() && e.isInstalled) {
-                            state.markSeen(e.repoFullName, e.latestTag); e.hasUpdate = false
-                        }
-                    }
+                    applyInstalledState(list, installed)
                     list
                 }
                 state.setLastScanTime(System.currentTimeMillis())
                 render()
             } catch (e: Exception) {
                 allEntries = emptyList(); render()
-                showState(getString(R.string.error_title), e.message ?: "Neznámá chyba")
+                val msg = friendlyError(e)
+                showState(getString(R.string.error_title), msg)
                 b.statusText.text = "Chyba načítání"
-                Toast.makeText(this@MainActivity, e.message ?: "Chyba", Toast.LENGTH_LONG).show()
+                Toast.makeText(this@MainActivity, msg, Toast.LENGTH_LONG).show()
+                if (e is GitHubMarket.ApiException && (e.code == 401 || e.code == 403)) showSettings()
             } finally {
                 b.progress.visibility = View.GONE
                 b.swipe.isRefreshing = false
+            }
+        }
+    }
+
+    private fun friendlyError(e: Exception): String = when (e) {
+        is GitHubMarket.ApiException -> e.message ?: "GitHub API chyba"
+        else -> e.message ?: "Neznámá chyba"
+    }
+
+    private fun refreshInstalledState() {
+        lifecycleScope.launch {
+            val installed = withContext(Dispatchers.IO) { InstalledApps.byPackage(this@MainActivity) }
+            val list = allEntries.map { it.copy() }
+            applyInstalledState(list, installed)
+            allEntries = list
+            render()
+        }
+    }
+
+    private fun applyInstalledState(list: MutableList<AppEntry>, installed: Map<String, InstalledApps.InstalledInfo>) {
+        for (e in list) {
+            val mapped = state.packageForRepo(e.repoFullName) ?: e.manifestPackage
+            val pkg = InstalledApps.match(e.manifestPackage, mapped, e.repoName, installed)
+            if (pkg != null) {
+                e.packageName = pkg.packageName
+                e.installedVersion = pkg.versionName ?: pkg.versionCode.toString()
+                e.installedVersionCode = pkg.versionCode
+                e.isInstalled = true
+                state.setPackageForRepo(e.repoFullName, pkg.packageName)
+            } else {
+                e.packageName = mapped
+                e.isInstalled = false
+            }
+            val seen = state.lastSeenTag(e.repoFullName)
+            e.hasUpdate = if (e.isInstalled) !e.latestTag.isNullOrBlank() && seen != null && seen != e.latestTag else false
+            if (seen == null && !e.latestTag.isNullOrBlank() && e.isInstalled) {
+                state.markSeen(e.repoFullName, e.latestTag); e.hasUpdate = false
             }
         }
     }
@@ -126,6 +165,7 @@ class MainActivity : AppCompatActivity() {
             append("${visible.size}/${allEntries.size} aplikací")
             val t = state.lastScanTime()
             if (t > 0) append(" • ").append(SimpleDateFormat("d.M. HH:mm", Locale.getDefault()).format(Date(t)))
+            if (state.githubToken() != null) append(" • token")
         }
         if (visible.isEmpty()) {
             val title = if (query.isNotBlank() || filter != Filter.ALL) "Nic nenalezeno" else getString(R.string.empty_title)
@@ -146,7 +186,7 @@ class MainActivity : AppCompatActivity() {
         view.findViewById<TextView>(R.id.detailMeta).text = listOfNotNull(
             entry.repoFullName, entry.language, entry.assetName,
             entry.publishedAt?.take(10)?.let { "vydáno $it" },
-            entry.packageName?.let { "balíček $it" }
+            (entry.packageName ?: entry.manifestPackage)?.let { "balíček $it" }
         ).joinToString("\n")
         view.findViewById<TextView>(R.id.detailNotes).text = entry.releaseNotes?.trim().orEmpty().ifBlank { entry.description }
         MaterialAlertDialogBuilder(this)
@@ -192,9 +232,14 @@ class MainActivity : AppCompatActivity() {
                         runOnUiThread { updateEntry(entry.repoFullName) { cur -> cur.copy(isDownloading = true, downloadProgress = p) } }
                     }
                 }
+                val apkPackage = withContext(Dispatchers.IO) { ApkInstaller.packageNameFromApk(this@MainActivity, file) }
+                if (!apkPackage.isNullOrBlank()) {
+                    state.setPackageForRepo(entry.repoFullName, apkPackage)
+                    updateEntry(entry.repoFullName) { it.copy(packageName = apkPackage) }
+                }
                 state.markSeen(entry.repoFullName, entry.latestTag)
                 updateEntry(entry.repoFullName) { it.copy(isDownloading = false, downloadProgress = 100, hasUpdate = false, status = "Instalace") }
-                ApkInstaller.install(this@MainActivity, file)
+                launchInstall(entry, file)
                 b.statusText.text = "Instalátor otevřen: ${entry.displayName}"
             } catch (e: Exception) {
                 updateEntry(entry.repoFullName) { it.copy(isDownloading = false, downloadProgress = 0) }
@@ -202,6 +247,17 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this@MainActivity, e.message ?: "Chyba", Toast.LENGTH_LONG).show()
             }
         }
+    }
+
+    private fun launchInstall(entry: AppEntry, file: File) {
+        if (ApkInstaller.install(this, file)) return
+        pendingInstall = entry to file
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.install_permission_title)
+            .setMessage(R.string.install_permission_body)
+            .setPositiveButton(R.string.open_settings) { _, _ -> ApkInstaller.requestInstallPermission(this) }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
     }
 
     private fun updateEntry(repoFullName: String, transform: (AppEntry) -> AppEntry) {
@@ -229,7 +285,7 @@ class MainActivity : AppCompatActivity() {
     private fun showAbout() {
         MaterialAlertDialogBuilder(this)
             .setTitle(R.string.about)
-            .setMessage(getString(R.string.about_body) + "\n\nÚčet: ${state.owner()}")
+            .setMessage(getString(R.string.about_body) + "\n\nÚčet: ${state.owner()}\nToken: ${if (state.githubToken() != null) "nastaven" else "nenastaven"}")
             .setPositiveButton(android.R.string.ok, null)
             .show()
     }
