@@ -1,0 +1,14 @@
+<resources>
+    <string name="app_name">InsaneMarket</string>
+    <string name="refresh">Obnovit</string>
+    <string name="edit">Upravit</string>
+    <string name="install">Instalovat</string>
+    <string name="update">Aktualizovat</string>
+    <string name="open">Otevřít</string>
+    <string name="save">Uložit</string>
+    <string name="cancel">Zrušit</string>
+    <string name="name_label">Název</string>
+    <string name="desc_label">Popis</string>
+    <string name="scanning">Prohledávám GitHub InsaneBadPC…</string>
+    <string name="no_apk">Bez APK release</string>
+</resources>
