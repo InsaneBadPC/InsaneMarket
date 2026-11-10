@@ -12,6 +12,7 @@ data class AppEntry(
     val apkUrl: String?,
     val assetName: String?,
     val assetSize: Long?,
+    val assetDigest: String?,
     val publishedAt: String?,
     val releaseNotes: String?,
     val manifestPackage: String? = null,
@@ -22,12 +23,22 @@ data class AppEntry(
     var isInstalled: Boolean = false,
     var isDownloading: Boolean = false,
     var downloadProgress: Int = 0,
-    var status: String = ""
+    var downloadReady: Boolean = false,
+    var note: String? = null,
 ) {
     fun matches(query: String): Boolean {
         if (query.isBlank()) return true
-        val q = query.lowercase()
-        return listOfNotNull(displayName, repoName, description, latestTag, packageName, manifestPackage, language)
-            .any { it.lowercase().contains(q) }
+        val q = query.trim().lowercase()
+        return listOfNotNull(
+            displayName,
+            repoName,
+            repoFullName,
+            description,
+            latestTag,
+            latestName,
+            packageName,
+            manifestPackage,
+            language,
+        ).any { it.lowercase().contains(q) }
     }
 }

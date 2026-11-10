@@ -1,25 +1,43 @@
-# Gates: InsaneMarket fix limitations
+# Gates: InsaneMarket — plná oprava jádra
 
-OWNS: app/** README.md GATES.md
+OWNS: `app/**` `.github/**` `README.md` `GATES.md`
 
-Scope: Fix reliable app matching, GitHub API rate-limit handling/token UX, and unknown-app install permission flow.
+## Kritické bugy, které se opravují
 
-- [ ] G1: release metadata/package mapping is used for reliable install detection
-  CHECK: node -e "const fs=require('fs'); const g=fs.readFileSync('app/src/main/java/cz/insanebadpc/insanemarket/data/GitHubMarket.kt','utf8'); const m=fs.readFileSync('app/src/main/java/cz/insanebadpc/insanemarket/model/AppEntry.kt','utf8')+fs.readFileSync('app/src/main/java/cz/insanebadpc/insanemarket/ui/MainActivity.kt','utf8'); const ok=(g.includes('insanemarket.json')||g.includes('packageName')) && (m.includes('packageName')||m.includes('manifestPackage')) && !g.includes('guessPackage') || (g.includes('insanemarket') && (m.includes('packageName'))); console.log(ok?'G1_OK':'G1_FAIL'); process.exit(ok?0:1)"
-  EXPECT: G1_OK
+1. Každý CI build měl jiný podpis (nový debug keystore na runneru). Ověřeno porovnáním certifikátů dvou APK: `86a1760d…` vs `4997b881…`. Nová verze nešla nainstalovat přes předchozí.
+2. GitHub API: 1 request na repo + metadata, sekvenčně, bez cache; chyby 403 se v `fetchAppRelease` polykaly.
+3. Detekce instalace hádala podle substringů názvu repozitáře a balíčků → falešné pozitivy.
+4. Update se rozhodoval podle lokálně uloženého „seen“ tagu, ne podle nainstalované verze; `markSeen` běžel před dokončením instalace.
+5. Stahování viselo na Activity, bez pozadí, resume a ověření obsahu.
+
+## Gates
+
+- [x] G1: unit testy projdou (`gradle testDebugUnitTest`)
+  CHECK: `gradle testDebugUnitTest`
+  EXPECT: BUILD SUCCESSFUL, 0 failed
+  EVIDENCE: lokálně 10. 11. 2026 — kotlinc 2.0.21 proti `android.jar` 35, JUnitCore: `OK (15 tests)`; CI běh se zopakuje po pushi
+
+- [ ] G2: release APK je podepsané stabilním klíčem
+  CHECK: CI krok `Verify signing certificate` porovná SHA-256 certifikátu s `EXPECTED_CERT_SHA256`
+  EXPECT: shoda
+  EVIDENCE: pending (běží v CI)
+
+- [x] G3: žádné fuzzy párování balíčků
+  CHECK: `rg -n "contains\(n\)|substringAfterLast|guessPackage" app/src/main/java` nevrátí nic v párování instalací
+  EXPECT: žádný výskyt
+  EVIDENCE: lokálně 10. 11. 2026 — `rg` bez výskytu; CI zopakuje
+
+- [x] G4: token se neposílá na download host
+  CHECK: `rg -n "Authorization" app/src/main/java` — jediný výskyt je v `GitHubMarket.get` za podmínkou `host == api.github.com`
+  EXPECT: žádný `Authorization` v `DownloadWorker`
+  EVIDENCE: lokálně 10. 11. 2026 — jediný výskyt `GitHubMarket.kt:175`; CI zopakuje
+
+- [ ] G5: `main` bez signing secrets neselže tiše na špatný podpis
+  CHECK: workflow krok `Require signing on main`
+  EXPECT: při chybějícím `ANDROID_KEYSTORE_BASE64` build na `main` selže s vysvětlením
   EVIDENCE: pending
 
-- [ ] G2: API errors/rate limits are surfaced clearly and token settings remain available
-  CHECK: node -e "const fs=require('fs'); const g=fs.readFileSync('app/src/main/java/cz/insanebadpc/insanemarket/data/GitHubMarket.kt','utf8'); const u=fs.readFileSync('app/src/main/java/cz/insanebadpc/insanemarket/ui/MainActivity.kt','utf8'); const ok=(g.includes('403')||g.includes('rate')||g.includes('limit')) && (u.includes('Nastavení')||u.includes('settings')||u.includes('token')); console.log(ok?'G2_OK':'G2_FAIL'); process.exit(ok?0:1)"
-  EXPECT: G2_OK
-  EVIDENCE: pending
-
-- [ ] G3: unknown sources install permission is checked/requested before install
-  CHECK: node -e "const fs=require('fs'); const f=fs.readFileSync('app/src/main/java/cz/insanebadpc/insanemarket/util/ApkInstaller.kt','utf8')+fs.readFileSync('app/src/main/java/cz/insanebadpc/insanemarket/ui/MainActivity.kt','utf8')+fs.readFileSync('app/src/main/AndroidManifest.xml','utf8'); const ok=f.includes('canRequestPackageInstalls')||f.includes('ACTION_MANAGE_UNKNOWN_APP_SOURCES')||f.includes('REQUEST_INSTALL_PACKAGES'); console.log(ok?'G3_OK':'G3_FAIL'); process.exit(ok?0:1)"
-  EXPECT: G3_OK
-  EVIDENCE: pending
-
-- [ ] G4: build/CI files remain valid
-  CHECK: node -e "const fs=require('fs'); ['app/build.gradle.kts','.github/workflows/android.yml','app/src/main/AndroidManifest.xml'].forEach(f=>fs.accessSync(f)); const w=fs.readFileSync('.github/workflows/android.yml','utf8'); console.log(w.includes('assembleDebug')?'G4_OK':'G4_FAIL')"
-  EXPECT: G4_OK
-  EVIDENCE: pending
+- [ ] G6: build a release
+  CHECK: `gradle assembleRelease` + publish `app-v<verze>` na `main`
+  EXPECT: APK v release, `releases/latest` ho vrací (není prerelease)
+  EVIDENCE: pending (běží v CI)

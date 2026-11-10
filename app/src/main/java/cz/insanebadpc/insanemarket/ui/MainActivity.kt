@@ -1,29 +1,36 @@
 package cz.insanebadpc.insanemarket.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.view.Menu
 import android.view.MenuItem
 import android.view.View
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.core.widget.doAfterTextChanged
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.textfield.TextInputEditText
+import cz.insanebadpc.insanemarket.BuildConfig
 import cz.insanebadpc.insanemarket.R
-import cz.insanebadpc.insanemarket.data.AppStateStore
-import cz.insanebadpc.insanemarket.data.GitHubMarket
 import cz.insanebadpc.insanemarket.databinding.ActivityMainBinding
 import cz.insanebadpc.insanemarket.model.AppEntry
 import cz.insanebadpc.insanemarket.util.ApkInstaller
+import cz.insanebadpc.insanemarket.util.ByteFormat
 import cz.insanebadpc.insanemarket.util.InstalledApps
-import cz.insanebadpc.insanemarket.util.LocalOverrides
+import cz.insanebadpc.insanemarket.worker.Downloads
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -33,146 +40,169 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var b: ActivityMainBinding
     private lateinit var adapter: AppAdapter
-    private lateinit var overrides: LocalOverrides
-    private lateinit var state: AppStateStore
-    private lateinit var market: GitHubMarket
-    private var allEntries = listOf<AppEntry>()
-    private var filter = Filter.ALL
+    private val viewModel: MarketViewModel by viewModels()
+
     private var query = ""
-    private var pendingInstall: Pair<AppEntry, File>? = null
+    private var filter = Filter.ALL
+    private var lastState: MarketUiState? = null
+    private var lastShownError: String? = null
+    private var pendingInstallRepo: String? = null
+    private var pendingDownload: AppEntry? = null
+    private var permissionPromptedFor: String? = null
+    private var askedNotifications = false
+
+    private val notificationPermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) {
+        pendingDownload?.let { viewModel.startDownload(it) }
+        pendingDownload = null
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         b = ActivityMainBinding.inflate(layoutInflater)
         setContentView(b.root)
         setSupportActionBar(b.toolbar)
-        overrides = LocalOverrides(this)
-        state = AppStateStore(this)
-        market = GitHubMarket(owner = state.owner(), tokenProvider = { state.githubToken() })
+
         adapter = AppAdapter(::onAction, ::onOpen, ::onEdit, ::onDetails)
         b.recycler.layoutManager = LinearLayoutManager(this)
         b.recycler.adapter = adapter
-        b.swipe.setOnRefreshListener { scan() }
-        b.searchInput.doAfterTextChanged { query = it?.toString().orEmpty(); render() }
+        b.swipe.setOnRefreshListener { viewModel.scan(force = true) }
+
+        b.searchInput.doAfterTextChanged {
+            query = it?.toString().orEmpty()
+            lastState?.let(::render)
+        }
         b.filterGroup.setOnCheckedStateChangeListener { _, checked ->
             filter = when (checked.firstOrNull()) {
                 R.id.filterUpdates -> Filter.UPDATES
                 R.id.filterInstalled -> Filter.INSTALLED
                 else -> Filter.ALL
             }
-            render()
+            lastState?.let(::render)
         }
-        scan()
+
+        if (savedInstanceState != null) {
+            query = savedInstanceState.getString(KEY_QUERY).orEmpty()
+            filter = Filter.values().getOrElse(savedInstanceState.getInt(KEY_FILTER, 0)) { Filter.ALL }
+            pendingInstallRepo = savedInstanceState.getString(KEY_PENDING_INSTALL)
+            if (query.isNotEmpty()) b.searchInput.setText(query)
+            when (filter) {
+                Filter.ALL -> b.filterGroup.check(R.id.filterAll)
+                Filter.UPDATES -> b.filterGroup.check(R.id.filterUpdates)
+                Filter.INSTALLED -> b.filterGroup.check(R.id.filterInstalled)
+            }
+        }
+
+        handleInstallIntent(intent)
+
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                viewModel.ui.collect(::render)
+            }
+        }
     }
 
     override fun onResume() {
         super.onResume()
-        pendingInstall?.let { (entry, file) ->
-            if (ApkInstaller.canInstall(this) && file.exists()) {
-                pendingInstall = null
-                launchInstall(entry, file)
-            }
-        }
-        if (::market.isInitialized && allEntries.isNotEmpty()) refreshInstalledState()
+        viewModel.refreshInstalled()
+        maybeInstallPending()
     }
 
-    override fun onCreateOptionsMenu(menu: Menu): Boolean { menuInflater.inflate(R.menu.main_menu, menu); return true }
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleInstallIntent(intent)
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putString(KEY_QUERY, query)
+        outState.putInt(KEY_FILTER, filter.ordinal)
+        outState.putString(KEY_PENDING_INSTALL, pendingInstallRepo)
+    }
+
+    override fun onCreateOptionsMenu(menu: Menu): Boolean {
+        menuInflater.inflate(R.menu.main_menu, menu)
+        return true
+    }
+
     override fun onOptionsItemSelected(item: MenuItem): Boolean = when (item.itemId) {
-        R.id.action_refresh -> { scan(); true }
-        R.id.action_settings -> { showSettings(); true }
-        R.id.action_about -> { showAbout(); true }
+        R.id.action_refresh -> {
+            viewModel.scan(force = true)
+            true
+        }
+
+        R.id.action_settings -> {
+            showSettings()
+            true
+        }
+
+        R.id.action_about -> {
+            showAbout()
+            true
+        }
+
         else -> super.onOptionsItemSelected(item)
     }
 
-    private fun scan() {
-        b.statusText.text = getString(R.string.scanning)
-        b.progress.visibility = View.VISIBLE
-        b.progress.isIndeterminate = true
-        b.swipe.isRefreshing = true
-        lifecycleScope.launch {
-            try {
-                val installed = withContext(Dispatchers.IO) { InstalledApps.byPackage(this@MainActivity) }
-                allEntries = withContext(Dispatchers.IO) {
-                    market.setOwner(state.owner())
-                    val list = market.scan().toMutableList()
-                    overrides.applyTo(list)
-                    applyInstalledState(list, installed)
-                    list
-                }
-                state.setLastScanTime(System.currentTimeMillis())
-                render()
-            } catch (e: Exception) {
-                allEntries = emptyList(); render()
-                val msg = friendlyError(e)
-                showState(getString(R.string.error_title), msg)
-                b.statusText.text = "Chyba načítání"
-                Toast.makeText(this@MainActivity, msg, Toast.LENGTH_LONG).show()
-                if (e is GitHubMarket.ApiException && (e.code == 401 || e.code == 403)) showSettings()
-            } finally {
-                b.progress.visibility = View.GONE
-                b.swipe.isRefreshing = false
-            }
-        }
-    }
-
-    private fun friendlyError(e: Exception): String = when (e) {
-        is GitHubMarket.ApiException -> e.message ?: "GitHub API chyba"
-        else -> e.message ?: "Neznámá chyba"
-    }
-
-    private fun refreshInstalledState() {
-        lifecycleScope.launch {
-            val installed = withContext(Dispatchers.IO) { InstalledApps.byPackage(this@MainActivity) }
-            val list = allEntries.map { it.copy() }.toMutableList()
-            applyInstalledState(list, installed)
-            allEntries = list
-            render()
-        }
-    }
-
-    private fun applyInstalledState(list: MutableList<AppEntry>, installed: Map<String, cz.insanebadpc.insanemarket.util.InstalledInfo>) {
-        for (e in list) {
-            val mapped = state.packageForRepo(e.repoFullName) ?: e.manifestPackage
-            val pkg = InstalledApps.match(e.manifestPackage, mapped, e.repoName, installed)
-            if (pkg != null) {
-                e.packageName = pkg.packageName
-                e.installedVersion = pkg.versionName ?: pkg.versionCode.toString()
-                e.installedVersionCode = pkg.versionCode
-                e.isInstalled = true
-                state.setPackageForRepo(e.repoFullName, pkg.packageName)
-            } else {
-                e.packageName = mapped
-                e.isInstalled = false
-            }
-            val seen = state.lastSeenTag(e.repoFullName)
-            e.hasUpdate = if (e.isInstalled) !e.latestTag.isNullOrBlank() && seen != null && seen != e.latestTag else false
-            if (seen == null && !e.latestTag.isNullOrBlank() && e.isInstalled) {
-                state.markSeen(e.repoFullName, e.latestTag); e.hasUpdate = false
-            }
-        }
-    }
-
-    private fun render() {
-        val visible = allEntries.filter { e ->
-            e.matches(query) && when (filter) {
+    private fun render(state: MarketUiState) {
+        lastState = state
+        val visible = state.entries.filter { entry ->
+            entry.matches(query) && when (filter) {
                 Filter.ALL -> true
-                Filter.UPDATES -> e.hasUpdate
-                Filter.INSTALLED -> e.isInstalled
+                Filter.UPDATES -> entry.hasUpdate
+                Filter.INSTALLED -> entry.isInstalled
             }
         }
         adapter.submitList(visible)
-        b.statusText.text = buildString {
-            append("${visible.size}/${allEntries.size} aplikací")
-            val t = state.lastScanTime()
-            if (t > 0) append(" • ").append(SimpleDateFormat("d.M. HH:mm", Locale.getDefault()).format(Date(t)))
-            if (state.githubToken() != null) append(" • token")
-        }
+        b.statusText.text = buildStatus(state, visible.size)
+        b.progress.visibility = if (state.scanning) View.VISIBLE else View.GONE
+        b.progress.isIndeterminate = true
+        if (!state.scanning) b.swipe.isRefreshing = false
+
         if (visible.isEmpty()) {
-            val title = if (query.isNotBlank() || filter != Filter.ALL) "Nic nenalezeno" else getString(R.string.empty_title)
-            val body = if (query.isNotBlank() || filter != Filter.ALL) "Změň hledání nebo filtr." else getString(R.string.empty_body)
-            showState(title, body)
-        } else b.emptyState.visibility = View.GONE
+            val filtered = query.isNotBlank() || filter != Filter.ALL
+            when {
+                state.error != null && !filtered -> showState(getString(R.string.error_title), state.error)
+                filtered -> showState(getString(R.string.nothing_found), getString(R.string.nothing_found_body))
+                else -> showState(getString(R.string.empty_title), getString(R.string.empty_body))
+            }
+        } else {
+            b.emptyState.visibility = View.GONE
+        }
+
+        if (state.error != null && state.error != lastShownError) {
+            lastShownError = state.error
+            Toast.makeText(this, state.error, Toast.LENGTH_LONG).show()
+            if (state.errorNeedsSettings) showSettings()
+        } else if (state.error == null) {
+            lastShownError = null
+        }
+
+        maybeInstallPending()
     }
+
+    private fun buildStatus(state: MarketUiState, visibleCount: Int): String = buildString {
+        if (state.scanning) append(getString(R.string.scanning)).append(" • ")
+        append(getString(R.string.status_count, visibleCount, state.entries.size))
+        if (state.lastScan > 0L) {
+            append(" • ").append(formatTime(state.lastScan))
+        }
+        if (state.rateRemaining != null) {
+            append(" • ").append(getString(R.string.status_rate, state.rateRemaining))
+            if (state.rateRemaining == 0 && state.rateResetEpoch != null) {
+                append(" (").append(formatTime(state.rateResetEpoch * 1000)).append(")")
+            }
+        }
+        if (state.fromCache) append(" • ").append(getString(R.string.status_cache))
+        if (state.failedRepos > 0) {
+            append(" • ").append(getString(R.string.status_failed_repos, state.failedRepos))
+        }
+    }
+
+    private fun formatTime(epochMillis: Long): String =
+        SimpleDateFormat("d.M. HH:mm", Locale.getDefault()).format(Date(epochMillis))
 
     private fun showState(title: String, body: String) {
         b.emptyState.visibility = View.VISIBLE
@@ -180,22 +210,92 @@ class MainActivity : AppCompatActivity() {
         b.emptyBody.text = body
     }
 
+    private fun onAction(entry: AppEntry) {
+        if (entry.isDownloading) {
+            viewModel.cancelDownload(entry)
+            return
+        }
+        val file = viewModel.downloadedFile(entry.repoFullName)
+        if (entry.downloadReady && file != null) {
+            pendingInstallRepo = entry.repoFullName
+            maybeInstallPending()
+            return
+        }
+        requestDownload(entry)
+    }
+
+    private fun requestDownload(entry: AppEntry) {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED &&
+            !askedNotifications
+        ) {
+            askedNotifications = true
+            pendingDownload = entry
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            viewModel.startDownload(entry)
+        }
+    }
+
+    private fun onOpen(entry: AppEntry) {
+        val packageName = entry.packageName ?: return
+        if (!ApkInstaller.openInstalled(this, packageName)) {
+            Toast.makeText(this, getString(R.string.cannot_open), Toast.LENGTH_SHORT).show()
+        }
+    }
+
     private fun onDetails(entry: AppEntry) {
         val view = layoutInflater.inflate(R.layout.dialog_app_detail, null)
-        view.findViewById<TextView>(R.id.detailVersion).text = "${entry.displayName} • ${entry.latestTag ?: "bez verze"}"
+        view.findViewById<TextView>(R.id.detailVersion).text =
+            "${entry.displayName} • ${entry.latestTag ?: getString(R.string.no_version)}"
         view.findViewById<TextView>(R.id.detailMeta).text = listOfNotNull(
-            entry.repoFullName, entry.language, entry.assetName,
-            entry.publishedAt?.take(10)?.let { "vydáno $it" },
-            (entry.packageName ?: entry.manifestPackage)?.let { "balíček $it" }
+            entry.repoFullName,
+            entry.language,
+            entry.assetName,
+            entry.assetSize?.let { ByteFormat.bytes(it) },
+            entry.publishedAt?.take(10)?.let { getString(R.string.published_on, it) },
+            entry.packageName?.let { getString(R.string.package_label, it) },
         ).joinToString("\n")
-        view.findViewById<TextView>(R.id.detailNotes).text = entry.releaseNotes?.trim().orEmpty().ifBlank { entry.description }
+        view.findViewById<TextView>(R.id.detailNotes).text =
+            entry.releaseNotes?.trim().orEmpty().ifBlank { entry.description }
+
+        val assign = view.findViewById<TextView>(R.id.detailAssign)
+        assign.visibility = if (entry.isInstalled) View.GONE else View.VISIBLE
+        assign.setOnClickListener { showInstalledPicker(entry) }
+
         MaterialAlertDialogBuilder(this)
-            .setTitle(getString(R.string.details))
+            .setTitle(R.string.details)
             .setView(view)
-            .setPositiveButton(R.string.download_install) { _, _ -> onAction(entry) }
+            .setPositiveButton(actionLabel(entry)) { _, _ -> onAction(entry) }
             .setNeutralButton(R.string.edit) { _, _ -> onEdit(entry) }
             .setNegativeButton(R.string.cancel, null)
             .show()
+    }
+
+    private fun actionLabel(entry: AppEntry): String = when {
+        entry.isDownloading -> getString(R.string.cancel)
+        entry.downloadReady -> getString(R.string.install)
+        entry.hasUpdate -> getString(R.string.update)
+        entry.isInstalled -> getString(R.string.reinstall)
+        else -> getString(R.string.download_install)
+    }
+
+    private fun showInstalledPicker(entry: AppEntry) {
+        lifecycleScope.launch {
+            val apps = withContext(Dispatchers.IO) { InstalledApps.launchable(this@MainActivity) }
+            if (apps.isEmpty()) {
+                Toast.makeText(this@MainActivity, R.string.no_installed_apps, Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            val labels = apps.map { "${it.label}\n${it.packageName}" }.toTypedArray()
+            MaterialAlertDialogBuilder(this@MainActivity)
+                .setTitle(R.string.map_package_title)
+                .setItems(labels) { _, which ->
+                    viewModel.assignPackage(entry, apps[which].packageName)
+                }
+                .setNegativeButton(R.string.cancel, null)
+                .show()
+        }
     }
 
     private fun onEdit(entry: AppEntry) {
@@ -203,80 +303,37 @@ class MainActivity : AppCompatActivity() {
         val name = view.findViewById<TextInputEditText>(R.id.editName).apply { setText(entry.displayName) }
         val desc = view.findViewById<TextInputEditText>(R.id.editDesc).apply { setText(entry.description) }
         MaterialAlertDialogBuilder(this)
-            .setTitle("Upravit aplikaci")
+            .setTitle(R.string.edit_title)
             .setView(view)
             .setPositiveButton(R.string.save) { _, _ ->
-                overrides.set(entry.repoFullName, name.text?.toString()?.ifBlank { entry.displayName }, desc.text?.toString())
-                val n = name.text?.toString()?.trim().orEmpty()
-                val d = desc.text?.toString()?.trim().orEmpty()
-                allEntries = allEntries.map { if (it.repoFullName == entry.repoFullName) it.copy(displayName = n.ifBlank { it.displayName }, description = d.ifBlank { it.description }) else it }
-                render()
+                viewModel.saveOverride(
+                    entry.repoFullName,
+                    name.text?.toString(),
+                    desc.text?.toString(),
+                )
             }
             .setNegativeButton(R.string.cancel, null)
             .show()
-    }
-
-    private fun onOpen(entry: AppEntry) {
-        val pkg = entry.packageName ?: return
-        if (!ApkInstaller.openInstalled(this, pkg)) Toast.makeText(this, "Aplikaci nelze otevřít.", Toast.LENGTH_SHORT).show()
-    }
-
-    private fun onAction(entry: AppEntry) {
-        val url = entry.apkUrl ?: return
-        updateEntry(entry.repoFullName) { it.copy(isDownloading = true, downloadProgress = 0, status = "Stahování") }
-        b.statusText.text = "Stahuji ${entry.displayName}…"
-        lifecycleScope.launch {
-            try {
-                val file = withContext(Dispatchers.IO) {
-                    ApkInstaller.download(this@MainActivity, url, entry.assetName ?: "${entry.repoName}-${entry.latestTag ?: "latest"}.apk", state.githubToken()) { p ->
-                        runOnUiThread { updateEntry(entry.repoFullName) { cur -> cur.copy(isDownloading = true, downloadProgress = p) } }
-                    }
-                }
-                val apkPackage = withContext(Dispatchers.IO) { ApkInstaller.packageNameFromApk(this@MainActivity, file) }
-                if (!apkPackage.isNullOrBlank()) {
-                    state.setPackageForRepo(entry.repoFullName, apkPackage)
-                    updateEntry(entry.repoFullName) { it.copy(packageName = apkPackage) }
-                }
-                state.markSeen(entry.repoFullName, entry.latestTag)
-                updateEntry(entry.repoFullName) { it.copy(isDownloading = false, downloadProgress = 100, hasUpdate = false, status = "Instalace") }
-                launchInstall(entry, file)
-                b.statusText.text = "Instalátor otevřen: ${entry.displayName}"
-            } catch (e: Exception) {
-                updateEntry(entry.repoFullName) { it.copy(isDownloading = false, downloadProgress = 0) }
-                b.statusText.text = "Stažení selhalo"
-                Toast.makeText(this@MainActivity, e.message ?: "Chyba", Toast.LENGTH_LONG).show()
-            }
-        }
-    }
-
-    private fun launchInstall(entry: AppEntry, file: File) {
-        if (ApkInstaller.install(this, file)) return
-        pendingInstall = entry to file
-        MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.install_permission_title)
-            .setMessage(R.string.install_permission_body)
-            .setPositiveButton(R.string.open_settings) { _, _ -> ApkInstaller.requestInstallPermission(this) }
-            .setNegativeButton(R.string.cancel, null)
-            .show()
-    }
-
-    private fun updateEntry(repoFullName: String, transform: (AppEntry) -> AppEntry) {
-        allEntries = allEntries.map { if (it.repoFullName == repoFullName) transform(it) else it }
-        render()
     }
 
     private fun showSettings() {
         val view = layoutInflater.inflate(R.layout.dialog_settings, null)
-        val owner = view.findViewById<TextInputEditText>(R.id.editOwner).apply { setText(state.owner()) }
-        val token = view.findViewById<TextInputEditText>(R.id.editToken).apply { setText(state.githubToken().orEmpty()) }
+        val owner = view.findViewById<TextInputEditText>(R.id.editOwner)
+            .apply { setText(viewModel.currentOwner()) }
+        val token = view.findViewById<TextInputEditText>(R.id.editToken)
+            .apply { setText(viewModel.currentToken().orEmpty()) }
         MaterialAlertDialogBuilder(this)
             .setTitle(R.string.settings)
             .setView(view)
             .setPositiveButton(R.string.save) { _, _ ->
-                state.setOwner(owner.text?.toString().orEmpty())
-                state.setGithubToken(token.text?.toString())
-                market.setOwner(state.owner())
-                scan()
+                viewModel.updateSettings(
+                    owner.text?.toString().orEmpty(),
+                    token.text?.toString(),
+                )
+            }
+            .setNeutralButton(R.string.clear_token) { _, _ ->
+                token.setText("")
+                viewModel.updateSettings(owner.text?.toString().orEmpty(), null)
             }
             .setNegativeButton(R.string.cancel, null)
             .show()
@@ -285,8 +342,71 @@ class MainActivity : AppCompatActivity() {
     private fun showAbout() {
         MaterialAlertDialogBuilder(this)
             .setTitle(R.string.about)
-            .setMessage(getString(R.string.about_body) + "\n\nÚčet: ${state.owner()}\nToken: ${if (state.githubToken() != null) "nastaven" else "nenastaven"}")
+            .setMessage(
+                getString(R.string.about_body) +
+                    "\n\n" + getString(R.string.about_version, BuildConfig.VERSION_NAME) +
+                    "\n" + getString(R.string.about_owner, viewModel.currentOwner()) +
+                    "\n" + getString(
+                        R.string.about_token,
+                        if (viewModel.currentToken() != null) getString(R.string.about_token_set)
+                        else getString(R.string.about_token_missing),
+                    )
+            )
             .setPositiveButton(android.R.string.ok, null)
             .show()
+    }
+
+    private fun handleInstallIntent(intent: android.content.Intent?) {
+        val safeIntent = intent ?: return
+        val repo = safeIntent.getStringExtra(Downloads.EXTRA_INSTALL_REPO) ?: return
+        safeIntent.removeExtra(Downloads.EXTRA_INSTALL_REPO)
+        pendingInstallRepo = repo
+        maybeInstallPending()
+    }
+
+    private fun maybeInstallPending() {
+        val repo = pendingInstallRepo ?: return
+        if (!ApkInstaller.canInstall(this)) {
+            if (permissionPromptedFor != repo) {
+                permissionPromptedFor = repo
+                showInstallPermissionDialog()
+            }
+            return
+        }
+        permissionPromptedFor = null
+        val file = viewModel.downloadedFile(repo)
+        if (file == null) {
+            pendingInstallRepo = null
+            Toast.makeText(this, R.string.download_missing, Toast.LENGTH_LONG).show()
+            return
+        }
+        pendingInstallRepo = null
+        if (ApkInstaller.hasSignatureMismatch(this, file)) {
+            Toast.makeText(this, R.string.signature_mismatch, Toast.LENGTH_LONG).show()
+            return
+        }
+        if (!ApkInstaller.install(this, file)) {
+            Toast.makeText(this, R.string.install_failed, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun showInstallPermissionDialog() {
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.install_permission_title)
+            .setMessage(R.string.install_permission_body)
+            .setPositiveButton(R.string.open_settings) { _, _ ->
+                ApkInstaller.requestInstallPermission(this)
+            }
+            .setNegativeButton(R.string.cancel) { _, _ ->
+                pendingInstallRepo = null
+                permissionPromptedFor = null
+            }
+            .show()
+    }
+
+    companion object {
+        private const val KEY_QUERY = "query"
+        private const val KEY_FILTER = "filter"
+        private const val KEY_PENDING_INSTALL = "pending_install"
     }
 }

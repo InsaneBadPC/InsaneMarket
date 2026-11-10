@@ -12,3 +12,5 @@
 *.jks
 *.apk
 *.aab
+/local.token
+/app/src/main/assets/default_token.txt

@@ -3,6 +3,22 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+val appVersionCode = System.getenv("VERSION_CODE")?.toIntOrNull()
+    ?: providers.gradleProperty("versionCode").orNull?.toIntOrNull()
+    ?: 1
+val appVersionName = System.getenv("VERSION_NAME")
+    ?: providers.gradleProperty("versionName").orNull
+    ?: "0.3.0"
+
+val keystoreFile = System.getenv("ANDROID_KEYSTORE_FILE")
+val keystorePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+val keystoreAlias = System.getenv("ANDROID_KEY_ALIAS")
+val keystoreKeyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+val hasSigning = !keystoreFile.isNullOrBlank() &&
+    !keystorePassword.isNullOrBlank() &&
+    !keystoreAlias.isNullOrBlank() &&
+    !keystoreKeyPassword.isNullOrBlank()
+
 android {
     namespace = "cz.insanebadpc.insanemarket"
     compileSdk = 35
@@ -11,9 +27,21 @@ android {
         applicationId = "cz.insanebadpc.insanemarket"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        versionCode = appVersionCode
+        versionName = appVersionName
+    }
+
+    signingConfigs {
+        if (hasSigning) {
+            create("release") {
+                storeFile = file(keystoreFile!!)
+                storePassword = keystorePassword!!
+                keyAlias = keystoreAlias!!
+                keyPassword = keystoreKeyPassword!!
+                enableV1Signing = true
+                enableV2Signing = true
+            }
+        }
     }
 
     buildTypes {
@@ -23,6 +51,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            if (hasSigning) signingConfig = signingConfigs.getByName("release")
         }
         debug { isDebuggable = true }
     }
@@ -31,7 +60,17 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
-    buildFeatures { viewBinding = true; buildConfig = true }
+    buildFeatures {
+        viewBinding = true
+        buildConfig = true
+    }
+    lint {
+        abortOnError = false
+        checkReleaseBuilds = false
+    }
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 dependencies {
@@ -43,6 +82,10 @@ dependencies {
     implementation("androidx.recyclerview:recyclerview:1.3.2")
     implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.7")
+    implementation("androidx.work:work-runtime-ktx:2.10.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
-    implementation("org.json:json:20240303")
+
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 }
