@@ -56,13 +56,13 @@ object Downloads {
             ?.toLongOrNull()
             ?: 0L
 
-    fun enqueue(context: Context, entry: AppEntry): UUID {
+    fun enqueue(context: Context, entry: AppEntry, downloadUrlOverride: String? = null): UUID {
         val request = OneTimeWorkRequestBuilder<DownloadWorker>()
             .setInputData(
                 Data.Builder()
                     .putString(KEY_REPO, entry.repoFullName)
                     .putString(KEY_NAME, entry.displayName)
-                    .putString(KEY_URL, entry.apkUrl)
+                    .putString(KEY_URL, downloadUrlOverride ?: entry.apkUrl)
                     .putString(KEY_FILE, fileName(entry))
                     .putString(KEY_TAG, entry.latestTag)
                     .putString(KEY_DIGEST, entry.assetDigest)

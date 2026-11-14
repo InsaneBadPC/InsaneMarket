@@ -1,11 +1,18 @@
 <resources>
-    <color name="ic_launcher_background">#0D1117</color>
-    <color name="market_primary">#2F81F7</color>
-    <color name="market_surface">#0D1117</color>
-    <color name="market_card">#161B22</color>
-    <color name="market_text">#E6EDF3</color>
-    <color name="market_muted">#8B949E</color>
-    <color name="market_success">#3FB950</color>
-    <color name="market_warning">#D29922</color>
-    <color name="market_border">#30363D</color>
+    <color name="ic_launcher_background">#090D16</color>
+    <color name="market_primary">#3B82F6</color>
+    <color name="market_accent">#8B5CF6</color>
+    <color name="market_web">#06B6D4</color>
+    <color name="market_surface">#090D16</color>
+    <color name="market_header">#0F1624</color>
+    <color name="market_card">#131C2E</color>
+    <color name="market_card_elevated">#1B2740</color>
+    <color name="market_text">#F1F5F9</color>
+    <color name="market_muted">#94A3B8</color>
+    <color name="market_success">#10B981</color>
+    <color name="market_warning">#F59E0B</color>
+    <color name="market_danger">#EF4444</color>
+    <color name="market_star">#FBBF24</color>
+    <color name="market_star_empty">#475569</color>
+    <color name="market_border">#23314B</color>
 </resources>

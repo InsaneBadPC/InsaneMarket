@@ -1,6 +1,24 @@
 <menu xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto">
-    <item android:id="@+id/action_refresh" android:title="@string/refresh" app:showAsAction="never"/>
-    <item android:id="@+id/action_settings" android:title="@string/settings" app:showAsAction="never"/>
-    <item android:id="@+id/action_about" android:title="@string/about" app:showAsAction="never"/>
+    <item
+        android:id="@+id/action_add"
+        android:title="@string/add_item"
+        android:icon="@android:drawable/ic_input_add"
+        app:showAsAction="ifRoom" />
+    <item
+        android:id="@+id/action_refresh"
+        android:title="@string/refresh"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/action_unhide_all"
+        android:title="@string/unhide_all"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/action_settings"
+        android:title="@string/settings"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/action_about"
+        android:title="@string/about"
+        app:showAsAction="never" />
 </menu>

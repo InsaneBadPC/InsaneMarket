@@ -1,8 +1,9 @@
 <resources>
     <style name="Theme.InsaneMarket" parent="Theme.Material3.Dark.NoActionBar">
         <item name="colorPrimary">@color/market_primary</item>
-        <item name="colorSecondary">@color/market_primary</item>
-        <item name="android:statusBarColor">@color/market_surface</item>
+        <item name="colorSecondary">@color/market_accent</item>
+        <item name="colorSurface">@color/market_card</item>
+        <item name="android:statusBarColor">@color/market_header</item>
         <item name="android:navigationBarColor">@color/market_surface</item>
         <item name="android:windowBackground">@color/market_surface</item>
         <item name="android:textColorPrimary">@color/market_text</item>

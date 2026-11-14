@@ -21,6 +21,7 @@ class ScanCache(private val file: File) {
         }
         return try {
             val root = JSONObject(text)
+            if (root.optInt("schemaVersion", 1) != SCHEMA_VERSION) return null
             if (root.optString("owner") != owner) return null
             val savedAt = root.optLong("savedAt")
             if (savedAt <= 0L || System.currentTimeMillis() - savedAt > maxAgeMs) return null
@@ -36,6 +37,7 @@ class ScanCache(private val file: File) {
 
     fun save(owner: String, entries: List<AppEntry>) {
         val root = JSONObject()
+            .put("schemaVersion", SCHEMA_VERSION)
             .put("owner", owner)
             .put("savedAt", System.currentTimeMillis())
             .put("entries", JSONArray(entries.map(::toJson)))
@@ -52,7 +54,7 @@ class ScanCache(private val file: File) {
         }
     }
 
-    private fun toJson(entry: AppEntry): JSONObject = JSONObject().apply {
+    fun toJson(entry: AppEntry): JSONObject = JSONObject().apply {
         put("repoName", entry.repoName)
         put("repoFullName", entry.repoFullName)
         put("repoUrl", entry.repoUrl)
@@ -62,15 +64,24 @@ class ScanCache(private val file: File) {
         put("latestTag", entry.latestTag ?: JSONObject.NULL)
         put("latestName", entry.latestName ?: JSONObject.NULL)
         put("apkUrl", entry.apkUrl ?: JSONObject.NULL)
+        put("apkApiUrl", entry.apkApiUrl ?: JSONObject.NULL)
         put("assetName", entry.assetName ?: JSONObject.NULL)
         put("assetSize", entry.assetSize ?: JSONObject.NULL)
         put("assetDigest", entry.assetDigest ?: JSONObject.NULL)
         put("publishedAt", entry.publishedAt ?: JSONObject.NULL)
         put("releaseNotes", entry.releaseNotes?.take(8000) ?: JSONObject.NULL)
         put("manifestPackage", entry.manifestPackage ?: JSONObject.NULL)
+        put("webUrl", entry.webUrl ?: JSONObject.NULL)
+        put("iconUrl", entry.iconUrl ?: JSONObject.NULL)
+        put("isPrivate", entry.isPrivate)
+        put("isExternal", entry.isExternal)
+        put("isManual", entry.isManual)
+        put("starsCount", entry.starsCount)
+        put("forksCount", entry.forksCount)
+        put("defaultBranch", entry.defaultBranch)
     }
 
-    private fun fromJson(objectJson: JSONObject): AppEntry? {
+    fun fromJson(objectJson: JSONObject): AppEntry? {
         val repoName = objectJson.optString("repoName")
         val repoFullName = objectJson.optString("repoFullName")
         if (repoName.isBlank() || repoFullName.isBlank()) return null
@@ -84,15 +95,28 @@ class ScanCache(private val file: File) {
             latestTag = objectJson.stringOrNull("latestTag"),
             latestName = objectJson.stringOrNull("latestName"),
             apkUrl = objectJson.stringOrNull("apkUrl"),
+            apkApiUrl = objectJson.stringOrNull("apkApiUrl"),
             assetName = objectJson.stringOrNull("assetName"),
             assetSize = objectJson.optLong("assetSize").takeIf { it > 0 },
             assetDigest = objectJson.stringOrNull("assetDigest"),
             publishedAt = objectJson.stringOrNull("publishedAt"),
             releaseNotes = objectJson.stringOrNull("releaseNotes"),
             manifestPackage = objectJson.stringOrNull("manifestPackage"),
+            webUrl = objectJson.stringOrNull("webUrl"),
+            iconUrl = objectJson.stringOrNull("iconUrl"),
+            isPrivate = objectJson.optBoolean("isPrivate", false),
+            isExternal = objectJson.optBoolean("isExternal", false),
+            isManual = objectJson.optBoolean("isManual", false),
+            starsCount = objectJson.optInt("starsCount", 0),
+            forksCount = objectJson.optInt("forksCount", 0),
+            defaultBranch = objectJson.stringOrNull("defaultBranch") ?: "main",
         )
     }
 
     private fun JSONObject.stringOrNull(key: String): String? =
-        optString(key).takeIf { it.isNotBlank() }
+        optString(key).takeIf { it.isNotBlank() && it != "null" }
+
+    companion object {
+        private const val SCHEMA_VERSION = 2
+    }
 }

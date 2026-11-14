@@ -3,7 +3,9 @@ package cz.insanebadpc.insanemarket.data
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MarketParserTest {
@@ -94,5 +96,46 @@ class MarketParserTest {
                 .put("state", "new")
         )
         assertNull(MarketParser.parse(repo(), release(assets), null))
+    }
+
+    @Test
+    fun detectsTreeApkWebAppAndIconFromRepositoryTree() {
+        val r = repo().put("has_pages", true).put("private", true)
+        val tree = JSONArray()
+            .put(JSONObject().put("type", "blob").put("path", "SecretsInsane.apk").put("size", 9352197L))
+            .put(JSONObject().put("type", "blob").put("path", "web/index.html").put("size", 1024L))
+            .put(JSONObject().put("type", "blob").put("path", "icon.png").put("size", 4096L))
+
+        val entry = MarketParser.parseRepo(
+            repo = r,
+            release = null,
+            metadata = null,
+            tree = tree,
+        )
+
+        assertNotNull(entry)
+        requireNotNull(entry)
+        assertTrue(entry.hasApk)
+        assertTrue(entry.hasWebApp)
+        assertTrue(entry.isPrivate)
+        assertEquals("SecretsInsane.apk", entry.assetName)
+        assertEquals("https://insanebadpc.github.io/-achy/", entry.webUrl)
+        assertEquals("https://raw.githubusercontent.com/InsaneBadPC/-achy/main/icon.png", entry.iconUrl)
+    }
+
+    @Test
+    fun pureWebAppRepoLoadsIntoWebSection() {
+        val r = repo().put("has_pages", true)
+        val entry = MarketParser.parseRepo(
+            repo = r,
+            release = null,
+            metadata = null,
+            tree = null,
+        )
+
+        requireNotNull(entry)
+        assertEquals(false, entry.hasApk)
+        assertEquals(true, entry.hasWebApp)
+        assertEquals("https://insanebadpc.github.io/-achy/", entry.webUrl)
     }
 }

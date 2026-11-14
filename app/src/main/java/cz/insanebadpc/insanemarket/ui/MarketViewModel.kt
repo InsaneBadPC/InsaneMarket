@@ -9,6 +9,8 @@ import cz.insanebadpc.insanemarket.data.AppStateStore
 import cz.insanebadpc.insanemarket.data.GitHubMarket
 import cz.insanebadpc.insanemarket.data.ScanCache
 import cz.insanebadpc.insanemarket.model.AppEntry
+import cz.insanebadpc.insanemarket.model.RepoDetailedInfo
+import cz.insanebadpc.insanemarket.model.RepoFileItem
 import cz.insanebadpc.insanemarket.util.InstalledApps
 import cz.insanebadpc.insanemarket.util.InstalledInfo
 import cz.insanebadpc.insanemarket.util.InstalledResolution
@@ -26,8 +28,18 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.net.SocketTimeoutException
+import java.net.URL
 import java.net.UnknownHostException
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import javax.net.ssl.SSLException
+
+enum class MarketSection {
+    APK,
+    WEB,
+    EXTERNAL,
+}
 
 data class MarketUiState(
     val entries: List<AppEntry> = emptyList(),
@@ -44,7 +56,7 @@ data class MarketUiState(
 class MarketViewModel(application: Application) : AndroidViewModel(application) {
     private val store = AppStateStore(application)
     private val overrides = LocalOverrides(application)
-    private val cache = ScanCache(File(application.cacheDir, "market-cache.json"))
+    private val cache = ScanCache(File(application.cacheDir, "market-cache-v2.json"))
     private val market = GitHubMarket(store.owner(), { store.githubToken() }, cache)
     private val workManager = WorkManager.getInstance(application)
 
@@ -64,16 +76,22 @@ class MarketViewModel(application: Application) : AndroidViewModel(application) 
         scanJob = viewModelScope.launch {
             try {
                 market.setOwner(store.owner())
-                val result = market.scan(force)
+                val result = market.scan(
+                    force = force,
+                    externalRepos = store.externalRepos(),
+                    manualRepos = store.manualRepos(),
+                )
                 val installed = withContext(Dispatchers.IO) { InstalledApps.byPackage(getApplication()) }
-                val list = result.entries.toMutableList()
-                overrides.applyTo(list)
-                reconcile(list, installed)
+                val merged = mergeWithCustomEntries(result.entries)
+                overrides.applyTo(merged)
+                applyUserMetadata(merged)
+                reconcile(merged, installed)
+                val sorted = sortEntries(merged)
                 val now = System.currentTimeMillis()
                 store.setLastScanTime(now)
                 _ui.update {
                     it.copy(
-                        entries = list,
+                        entries = sorted,
                         scanning = false,
                         error = null,
                         errorNeedsSettings = false,
@@ -87,8 +105,13 @@ class MarketViewModel(application: Application) : AndroidViewModel(application) 
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                // Even if GitHub API fails (e.g. offline), still show custom entries if any
+                val fallback = mergeWithCustomEntries(_ui.value.entries)
+                overrides.applyTo(fallback)
+                applyUserMetadata(fallback)
                 _ui.update {
                     it.copy(
+                        entries = sortEntries(fallback),
                         scanning = false,
                         error = friendlyMessage(e),
                         errorNeedsSettings = needsSettings(e),
@@ -98,22 +121,56 @@ class MarketViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    private fun mergeWithCustomEntries(scanned: List<AppEntry>): MutableList<AppEntry> {
+        val byKey = LinkedHashMap<String, AppEntry>()
+        for (e in scanned) {
+            byKey[e.repoFullName.lowercase()] = e.copy()
+        }
+        for (custom in store.customEntries()) {
+            val key = custom.repoFullName.lowercase()
+            if (key !in byKey) {
+                byKey[key] = custom.copy()
+            }
+        }
+        return byKey.values.toMutableList()
+    }
+
+    private fun applyUserMetadata(list: MutableList<AppEntry>) {
+        val externalLower = store.externalRepos().map { it.lowercase() }.toSet()
+        for (e in list) {
+            e.userRating = store.userRating(e.repoFullName)
+            e.isHidden = store.isHidden(e.repoFullName)
+        }
+    }
+
+    private fun sortEntries(list: List<AppEntry>): List<AppEntry> =
+        list.sortedWith(
+            compareByDescending<AppEntry> { it.userRating }
+                .thenByDescending { it.hasUpdate }
+                .thenByDescending { it.publishedAt ?: "" }
+                .thenBy { it.displayName.lowercase() }
+        )
+
     fun refreshInstalled() {
         val current = _ui.value.entries
         if (current.isEmpty() || _ui.value.scanning) return
         viewModelScope.launch {
             val installed = withContext(Dispatchers.IO) { InstalledApps.byPackage(getApplication()) }
             val list = _ui.value.entries.map { it.copy() }.toMutableList()
+            applyUserMetadata(list)
             reconcile(list, installed)
-            _ui.update { it.copy(entries = list) }
+            _ui.update { it.copy(entries = sortEntries(list)) }
         }
     }
 
     fun startDownload(entry: AppEntry) {
         if (entry.apkUrl.isNullOrBlank()) return
-        Downloads.enqueue(getApplication(), entry)
         updateEntry(entry.repoFullName) {
             it.copy(isDownloading = true, downloadProgress = 0, downloadReady = false, note = null)
+        }
+        viewModelScope.launch {
+            val resolvedUrl = market.resolveAssetDownloadUrl(entry) ?: entry.apkUrl
+            Downloads.enqueue(getApplication(), entry, resolvedUrl)
         }
     }
 
@@ -146,15 +203,206 @@ class MarketViewModel(application: Application) : AndroidViewModel(application) 
         refreshInstalled()
     }
 
-    fun saveOverride(repoFullName: String, displayName: String?, description: String?) {
-        overrides.set(repoFullName, displayName, description)
+    fun saveOverride(
+        repoFullName: String,
+        displayName: String?,
+        description: String?,
+        webUrl: String? = null,
+        apkUrl: String? = null,
+        iconUrl: String? = null,
+    ) {
+        overrides.set(repoFullName, displayName, description, webUrl, apkUrl, iconUrl)
         updateEntry(repoFullName) { entry ->
             entry.copy(
                 displayName = displayName?.trim()?.ifBlank { null } ?: entry.displayName,
                 description = description?.trim()?.ifBlank { null } ?: entry.description,
+                webUrl = webUrl?.trim()?.ifBlank { null } ?: entry.webUrl,
+                apkUrl = apkUrl?.trim()?.ifBlank { null } ?: entry.apkUrl,
+                iconUrl = iconUrl?.trim()?.ifBlank { null } ?: entry.iconUrl,
             )
         }
     }
+
+    fun rateEntry(entry: AppEntry, stars: Int) {
+        val nextRating = if (entry.userRating == stars) 0 else stars.coerceIn(1, 5)
+        store.setUserRating(entry.repoFullName, nextRating)
+        updateEntries { list ->
+            sortEntries(
+                list.map {
+                    if (it.repoFullName.equals(entry.repoFullName, ignoreCase = true)) {
+                        it.copy(userRating = nextRating)
+                    } else {
+                        it
+                    }
+                }
+            )
+        }
+    }
+
+    fun setHidden(entry: AppEntry, hidden: Boolean) {
+        store.setHidden(entry.repoFullName, hidden)
+        updateEntries { list ->
+            list.map {
+                if (it.repoFullName.equals(entry.repoFullName, ignoreCase = true)) {
+                    it.copy(isHidden = hidden)
+                } else {
+                    it
+                }
+            }
+        }
+    }
+
+    fun unhideAll() {
+        for (repo in store.hiddenRepos()) {
+            store.setHidden(repo, false)
+        }
+        updateEntries { list -> list.map { it.copy(isHidden = false) } }
+    }
+
+    fun hiddenCount(): Int = store.hiddenRepos().size
+
+    fun removeEntry(entry: AppEntry) {
+        store.removeExternalRepo(entry.repoFullName)
+        store.removeManualRepo(entry.repoFullName)
+        store.removeCustomEntry(entry.repoFullName)
+        updateEntries { list ->
+            list.filterNot { it.repoFullName.equals(entry.repoFullName, ignoreCase = true) }
+        }
+    }
+
+    fun addByUrl(
+        section: MarketSection,
+        rawUrl: String,
+        customName: String?,
+        customDesc: String?,
+        customWebUrl: String?,
+        customIconUrl: String?,
+        onResult: (Result<AppEntry>) -> Unit,
+    ) {
+        val trimmedUrl = rawUrl.trim()
+        if (trimmedUrl.isBlank()) {
+            onResult(Result.failure(IllegalArgumentException("Zadej URL adresu nebo owner/repo.")))
+            return
+        }
+
+        viewModelScope.launch {
+            try {
+                val isDirectApkLink = trimmedUrl.substringBefore('?').endsWith(".apk", ignoreCase = true)
+                val parsedRepo = if (!isDirectApkLink) GitHubMarket.parseRepoFullName(trimmedUrl) else null
+
+                if (parsedRepo != null) {
+                    val isExt = section == MarketSection.EXTERNAL
+                    val entry = market.fetchSingleRepo(
+                        urlOrFullName = parsedRepo,
+                        isExternal = isExt,
+                        isManual = !isExt,
+                    )
+                    if (isExt) {
+                        store.addExternalRepo(entry.repoFullName)
+                    } else {
+                        store.addManualRepo(entry.repoFullName)
+                    }
+                    store.setHidden(entry.repoFullName, false)
+
+                    val finalName = customName?.trim()?.takeIf { it.isNotBlank() } ?: entry.displayName
+                    val finalDesc = customDesc?.trim()?.takeIf { it.isNotBlank() } ?: entry.description
+                    val finalWeb = customWebUrl?.trim()?.takeIf { it.isNotBlank() }
+                        ?: entry.webUrl
+                        ?: if (section == MarketSection.WEB) entry.repoUrl else null
+                    val finalIcon = customIconUrl?.trim()?.takeIf { it.isNotBlank() } ?: entry.iconUrl
+
+                    overrides.set(
+                        repoFullName = entry.repoFullName,
+                        displayName = finalName,
+                        description = finalDesc,
+                        webUrl = finalWeb,
+                        apkUrl = entry.apkUrl,
+                        iconUrl = finalIcon,
+                    )
+                    val updated = entry.copy(
+                        displayName = finalName,
+                        description = finalDesc,
+                        webUrl = finalWeb,
+                        iconUrl = finalIcon,
+                        userRating = store.userRating(entry.repoFullName),
+                        isHidden = false,
+                    )
+                    val installed = withContext(Dispatchers.IO) { InstalledApps.byPackage(getApplication()) }
+                    updateEntries { current ->
+                        val next = current
+                            .filterNot { it.repoFullName.equals(updated.repoFullName, ignoreCase = true) }
+                            .toMutableList()
+                        next.add(updated)
+                        reconcile(next, installed)
+                        sortEntries(next)
+                    }
+                    onResult(Result.success(updated))
+                } else {
+                    if (section == MarketSection.EXTERNAL) {
+                        throw IllegalArgumentException("Pro cizí repozitář zadej GitHub URL (např. https://github.com/owner/repo nebo owner/repo).")
+                    }
+                    val normalizedUrl = if (trimmedUrl.startsWith("http://") || trimmedUrl.startsWith("https://")) {
+                        trimmedUrl
+                    } else {
+                        "https://$trimmedUrl"
+                    }
+                    val hostOrPath = runCatching {
+                        val u = URL(normalizedUrl)
+                        u.path.trim('/').substringAfterLast('/').removeSuffix(".apk").ifBlank { u.host }
+                    }.getOrDefault("Aplikace")
+
+                    val name = customName?.trim()?.takeIf { it.isNotBlank() } ?: hostOrPath
+                    val desc = customDesc?.trim()?.takeIf { it.isNotBlank() }
+                        ?: if (section == MarketSection.APK) "Ručně přidané APK z URL." else "Ručně přidaná webová aplikace."
+                    val nowIso = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).format(Date())
+                    val id = "manual:${normalizedUrl.lowercase()}"
+
+                    val customEntry = AppEntry(
+                        repoName = hostOrPath,
+                        repoFullName = id,
+                        repoUrl = normalizedUrl,
+                        displayName = name,
+                        description = desc,
+                        language = if (section == MarketSection.WEB) "Web" else "Android APK",
+                        latestTag = "v1.0",
+                        latestName = "Ruční URL",
+                        apkUrl = if (section == MarketSection.APK || isDirectApkLink) normalizedUrl else null,
+                        assetName = if (section == MarketSection.APK || isDirectApkLink) "$hostOrPath.apk" else null,
+                        assetSize = null,
+                        assetDigest = null,
+                        publishedAt = nowIso,
+                        releaseNotes = desc,
+                        webUrl = if (section == MarketSection.WEB) normalizedUrl else customWebUrl?.trim()?.takeIf { it.isNotBlank() },
+                        iconUrl = customIconUrl?.trim()?.takeIf { it.isNotBlank() },
+                        isManual = true,
+                        isExternal = false,
+                        userRating = store.userRating(id),
+                        isHidden = false,
+                    )
+                    store.addOrUpdateCustomEntry(customEntry)
+                    store.setHidden(id, false)
+                    val installed = withContext(Dispatchers.IO) { InstalledApps.byPackage(getApplication()) }
+                    updateEntries { current ->
+                        val next = current
+                            .filterNot { it.repoFullName.equals(id, ignoreCase = true) }
+                            .toMutableList()
+                        next.add(customEntry)
+                        reconcile(next, installed)
+                        sortEntries(next)
+                    }
+                    onResult(Result.success(customEntry))
+                }
+            } catch (e: Exception) {
+                onResult(Result.failure(e))
+            }
+        }
+    }
+
+    suspend fun fetchRepoDetails(repoFullName: String): RepoDetailedInfo =
+        market.fetchRepoDetails(repoFullName)
+
+    suspend fun fetchRepoDirectory(repoFullName: String, path: String = "", ref: String? = null): List<RepoFileItem> =
+        market.fetchRepoDirectory(repoFullName, path, ref)
 
     fun updateSettings(owner: String, token: String?) {
         store.setOwner(owner)
@@ -297,7 +545,9 @@ class MarketViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun updateEntry(repoFullName: String, transform: (AppEntry) -> AppEntry) {
-        updateEntries { entries -> entries.map { if (it.repoFullName == repoFullName) transform(it) else it } }
+        updateEntries { entries ->
+            sortEntries(entries.map { if (it.repoFullName.equals(repoFullName, ignoreCase = true)) transform(it) else it })
+        }
     }
 
     private fun statePriority(state: WorkInfo.State): Int = when (state) {
