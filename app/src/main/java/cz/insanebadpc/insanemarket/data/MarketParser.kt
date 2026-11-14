@@ -113,7 +113,7 @@ object MarketParser {
         val metadataPackage = metadata?.stringOrNull("packageName") ?: metadata?.stringOrNull("package")
         val display = metadata?.stringOrNull("displayName")
             ?: metadata?.stringOrNull("name")
-            ?: prettify(name)
+            ?: resolveDisplayName(name, release?.stringOrNull("name"), assetName)
 
         val rawDescription = metadata?.stringOrNull("description")
             ?: release?.stringOrNull("body")
@@ -396,6 +396,41 @@ object MarketParser {
         return cleanedLines.joinToString("\n").ifBlank {
             repoDescription?.trim().orEmpty().ifBlank { trimmed }
         }
+    }
+
+    fun resolveDisplayName(repoName: String, releaseName: String?, assetName: String?): String {
+        val mangledByGitHub = repoName.startsWith("-") ||
+            repoName.endsWith("-") ||
+            repoName.contains("--") ||
+            Regex("""^[A-Za-z]+-[a-z]{1,4}$""").matches(repoName)
+        if (mangledByGitHub) {
+            cleanReleaseTitle(releaseName)?.let { return it }
+            cleanAssetAppName(assetName)?.let { return it }
+        }
+        return prettify(repoName)
+    }
+
+    private fun cleanReleaseTitle(raw: String?): String? {
+        val t = raw?.trim()?.takeIf { it.isNotBlank() } ?: return null
+        val cleaned = t
+            .replace(Regex("""\s*\([^)]*\)\s*$"""), "")
+            .replace(Regex("""\s+v?\d+(?:\.\d+)+(?:[-+._A-Za-z0-9]*)?$""", RegexOption.IGNORE_CASE), "")
+            .trim()
+        if (cleaned.isBlank()) return null
+        val lower = cleaned.lowercase()
+        val genericPrefixes = listOf("release", "sestavení", "sestaveni", "build", "version", "verze", "app-v", "v")
+        if (genericPrefixes.any { lower == it || lower.startsWith("$it ") }) return null
+        return cleaned
+    }
+
+    private fun cleanAssetAppName(assetName: String?): String? {
+        val raw = assetName?.trim()?.takeIf { it.endsWith(".apk", ignoreCase = true) } ?: return null
+        val base = raw.substring(0, raw.length - 4)
+            .replace(Regex("""[-_ ]v?\d+(?:\.\d+)+.*$""", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("""[-_ ](release|debug|unsigned)$""", RegexOption.IGNORE_CASE), "")
+            .trim()
+        if (base.isBlank() || base.equals("app", ignoreCase = true)) return null
+        return prettify(base)
     }
 
     fun prettify(name: String): String = name

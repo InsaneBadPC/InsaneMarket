@@ -138,4 +138,37 @@ class MarketParserTest {
         assertEquals(true, entry.hasWebApp)
         assertEquals("https://insanebadpc.github.io/-achy/", entry.webUrl)
     }
+
+    @Test
+    fun mangledDiacriticRepoUsesReleaseOrAssetName() {
+        val chessRelease = JSONObject()
+            .put("tag_name", "v1.0.28")
+            .put("name", "Wacky Chess Mayhem v1.0.28")
+            .put("assets", JSONArray().put(
+                JSONObject()
+                    .put("name", "WackyChess-v1.0.28.apk")
+                    .put("browser_download_url", "https://example.com/WackyChess.apk")
+                    .put("state", "uploaded")
+            ))
+        val chess = MarketParser.parse(repo(), chessRelease, null)
+        requireNotNull(chess)
+        assertEquals("Wacky Chess Mayhem", chess.displayName)
+
+        val dochazkaRepo = JSONObject()
+            .put("name", "Doch-zka")
+            .put("full_name", "InsaneBadPC/Doch-zka")
+            .put("html_url", "https://github.com/InsaneBadPC/Doch-zka")
+        val dochazkaRelease = JSONObject()
+            .put("tag_name", "v1.0.26")
+            .put("name", "Sestavení v1.0.26 (Web & Android APK)")
+            .put("assets", JSONArray().put(
+                JSONObject()
+                    .put("name", "Dochazka-v1.0.26.apk")
+                    .put("browser_download_url", "https://example.com/Dochazka.apk")
+                    .put("state", "uploaded")
+            ))
+        val dochazka = MarketParser.parse(dochazkaRepo, dochazkaRelease, null)
+        requireNotNull(dochazka)
+        assertEquals("Dochazka", dochazka.displayName)
+    }
 }
