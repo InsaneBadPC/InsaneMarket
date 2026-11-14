@@ -21,6 +21,11 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.updateLayoutParams
+import androidx.core.view.updatePadding
 import androidx.core.widget.doAfterTextChanged
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
@@ -77,6 +82,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         b = ActivityMainBinding.inflate(layoutInflater)
         setContentView(b.root)
+        applySystemBarInsets()
         setSupportActionBar(b.toolbar)
 
         adapter = AppAdapter(
@@ -761,6 +767,31 @@ class MainActivity : AppCompatActivity() {
             ).apply { topMargin = dp(6) }
         }
         parent.addView(tv)
+    }
+
+    private fun applySystemBarInsets() {
+        WindowCompat.getInsetsController(window, window.decorView).apply {
+            isAppearanceLightStatusBars = false
+            isAppearanceLightNavigationBars = false
+        }
+        val recyclerBaseBottom = dp(88)
+        val fabBaseMargin = dp(16)
+        ViewCompat.setOnApplyWindowInsetsListener(b.root) { _, windowInsets ->
+            val insets = windowInsets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+            )
+            b.appBar.updatePadding(top = insets.top, left = insets.left, right = insets.right)
+            b.recycler.updatePadding(
+                left = dp(14) + insets.left,
+                right = dp(14) + insets.right,
+                bottom = recyclerBaseBottom + insets.bottom,
+            )
+            b.fabAdd.updateLayoutParams<ViewGroup.MarginLayoutParams> {
+                bottomMargin = fabBaseMargin + insets.bottom
+                rightMargin = fabBaseMargin + insets.right
+            }
+            windowInsets
+        }
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
