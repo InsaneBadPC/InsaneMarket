@@ -645,7 +645,7 @@ class MainActivity : AppCompatActivity() {
                             this,
                             null,
                             if (asset.isApk) com.google.android.material.R.attr.materialButtonStyle
-                            else com.google.android.material.R.attr.materialButtonTonalStyle,
+                            else com.google.android.material.R.attr.materialButtonOutlinedStyle,
                         ).apply {
                             val prefix = if (asset.isApk) "📱 Stáhnout a instalovat: " else "⬇ Soubor: "
                             text = "$prefix${asset.name} (${ByteFormat.bytes(asset.size)})"
