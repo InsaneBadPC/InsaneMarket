@@ -51,6 +51,10 @@ data class MarketUiState(
     val fromCache: Boolean = false,
     val lastScan: Long = 0L,
     val failedRepos: Int = 0,
+    val githubSearchResults: List<AppEntry> = emptyList(),
+    val githubSearchQuery: String = "",
+    val searchingGitHub: Boolean = false,
+    val savedExternalLower: Set<String> = emptySet(),
 )
 
 class MarketViewModel(application: Application) : AndroidViewModel(application) {
@@ -60,10 +64,16 @@ class MarketViewModel(application: Application) : AndroidViewModel(application) 
     private val market = GitHubMarket(store.owner(), { store.githubToken() }, cache)
     private val workManager = WorkManager.getInstance(application)
 
-    private val _ui = MutableStateFlow(MarketUiState(lastScan = store.lastScanTime()))
+    private val _ui = MutableStateFlow(
+        MarketUiState(
+            lastScan = store.lastScanTime(),
+            savedExternalLower = store.externalRepos().map { it.lowercase() }.toSet(),
+        )
+    )
     val ui: StateFlow<MarketUiState> = _ui.asStateFlow()
 
     private var scanJob: Job? = null
+    private var searchJob: Job? = null
 
     init {
         observeDownloads()
@@ -100,6 +110,7 @@ class MarketViewModel(application: Application) : AndroidViewModel(application) 
                         fromCache = result.fromCache,
                         lastScan = now,
                         failedRepos = result.failedRepos,
+                        savedExternalLower = currentSavedExternalLower(),
                     )
                 }
             } catch (e: CancellationException) {
@@ -115,7 +126,114 @@ class MarketViewModel(application: Application) : AndroidViewModel(application) 
                         scanning = false,
                         error = friendlyMessage(e),
                         errorNeedsSettings = needsSettings(e),
+                        savedExternalLower = currentSavedExternalLower(),
                     )
+                }
+            }
+        }
+    }
+
+    private fun currentSavedExternalLower(): Set<String> =
+        store.externalRepos().map { it.lowercase() }.toSet()
+
+    fun searchGitHub(rawQuery: String) {
+        val trimmed = rawQuery.trim()
+        if (trimmed.isBlank()) {
+            clearGitHubSearch()
+            return
+        }
+        searchJob?.cancel()
+        _ui.update {
+            it.copy(
+                searchingGitHub = true,
+                githubSearchQuery = trimmed,
+                error = null,
+                errorNeedsSettings = false,
+            )
+        }
+        searchJob = viewModelScope.launch {
+            try {
+                val results = market.searchRepositories(trimmed).toMutableList()
+                overrides.applyTo(results)
+                applyUserMetadata(results)
+                val sorted = results.sortedWith(
+                    compareByDescending<AppEntry> { it.userRating }
+                        .thenByDescending { it.starsCount }
+                        .thenByDescending { it.publishedAt ?: "" }
+                        .thenBy { it.displayName.lowercase() }
+                )
+                _ui.update {
+                    it.copy(
+                        githubSearchResults = sorted,
+                        githubSearchQuery = trimmed,
+                        searchingGitHub = false,
+                        savedExternalLower = currentSavedExternalLower(),
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _ui.update {
+                    it.copy(
+                        searchingGitHub = false,
+                        error = friendlyMessage(e),
+                        errorNeedsSettings = needsSettings(e),
+                    )
+                }
+            }
+        }
+    }
+
+    fun clearGitHubSearch() {
+        searchJob?.cancel()
+        searchJob = null
+        _ui.update {
+            it.copy(
+                githubSearchResults = emptyList(),
+                githubSearchQuery = "",
+                searchingGitHub = false,
+            )
+        }
+    }
+
+    fun saveExternalFromSearch(entry: AppEntry, onSaved: ((AppEntry) -> Unit)? = null) {
+        store.addExternalRepo(entry.repoFullName)
+        store.setHidden(entry.repoFullName, false)
+        val savedEntry = entry.copy(
+            isExternal = true,
+            isHidden = false,
+            userRating = store.userRating(entry.repoFullName),
+        )
+        _ui.update { state ->
+            val nextEntries = state.entries
+                .filterNot { it.repoFullName.equals(savedEntry.repoFullName, ignoreCase = true) }
+                .toMutableList()
+            nextEntries.add(savedEntry)
+            state.copy(
+                entries = sortEntries(nextEntries),
+                savedExternalLower = currentSavedExternalLower(),
+            )
+        }
+        onSaved?.invoke(savedEntry)
+        viewModelScope.launch {
+            runCatching {
+                val full = market.fetchSingleRepo(
+                    urlOrFullName = entry.repoFullName,
+                    isExternal = true,
+                    isManual = false,
+                )
+                val list = mutableListOf(full)
+                overrides.applyTo(list)
+                applyUserMetadata(list)
+                val installed = withContext(Dispatchers.IO) { InstalledApps.byPackage(getApplication()) }
+                val enriched = list.first()
+                updateEntries { current ->
+                    val next = current
+                        .filterNot { it.repoFullName.equals(enriched.repoFullName, ignoreCase = true) }
+                        .toMutableList()
+                    next.add(enriched)
+                    reconcile(next, installed)
+                    sortEntries(next)
                 }
             }
         }
@@ -226,9 +344,9 @@ class MarketViewModel(application: Application) : AndroidViewModel(application) 
     fun rateEntry(entry: AppEntry, stars: Int) {
         val nextRating = if (entry.userRating == stars) 0 else stars.coerceIn(1, 5)
         store.setUserRating(entry.repoFullName, nextRating)
-        updateEntries { list ->
-            sortEntries(
-                list.map {
+        _ui.update { state ->
+            val updatedEntries = sortEntries(
+                state.entries.map {
                     if (it.repoFullName.equals(entry.repoFullName, ignoreCase = true)) {
                         it.copy(userRating = nextRating)
                     } else {
@@ -236,19 +354,46 @@ class MarketViewModel(application: Application) : AndroidViewModel(application) 
                     }
                 }
             )
+            val updatedSearch = state.githubSearchResults
+                .map {
+                    if (it.repoFullName.equals(entry.repoFullName, ignoreCase = true)) {
+                        it.copy(userRating = nextRating)
+                    } else {
+                        it
+                    }
+                }
+                .sortedWith(
+                    compareByDescending<AppEntry> { it.userRating }
+                        .thenByDescending { it.starsCount }
+                        .thenByDescending { it.publishedAt ?: "" }
+                        .thenBy { it.displayName.lowercase() }
+                )
+            state.copy(
+                entries = updatedEntries,
+                githubSearchResults = updatedSearch,
+            )
         }
     }
 
     fun setHidden(entry: AppEntry, hidden: Boolean) {
         store.setHidden(entry.repoFullName, hidden)
-        updateEntries { list ->
-            list.map {
-                if (it.repoFullName.equals(entry.repoFullName, ignoreCase = true)) {
-                    it.copy(isHidden = hidden)
-                } else {
-                    it
-                }
-            }
+        _ui.update { state ->
+            state.copy(
+                entries = state.entries.map {
+                    if (it.repoFullName.equals(entry.repoFullName, ignoreCase = true)) {
+                        it.copy(isHidden = hidden)
+                    } else {
+                        it
+                    }
+                },
+                githubSearchResults = state.githubSearchResults.map {
+                    if (it.repoFullName.equals(entry.repoFullName, ignoreCase = true)) {
+                        it.copy(isHidden = hidden)
+                    } else {
+                        it
+                    }
+                },
+            )
         }
     }
 
@@ -256,7 +401,12 @@ class MarketViewModel(application: Application) : AndroidViewModel(application) 
         for (repo in store.hiddenRepos()) {
             store.setHidden(repo, false)
         }
-        updateEntries { list -> list.map { it.copy(isHidden = false) } }
+        _ui.update { state ->
+            state.copy(
+                entries = state.entries.map { it.copy(isHidden = false) },
+                githubSearchResults = state.githubSearchResults.map { it.copy(isHidden = false) },
+            )
+        }
     }
 
     fun hiddenCount(): Int = store.hiddenRepos().size
@@ -265,8 +415,11 @@ class MarketViewModel(application: Application) : AndroidViewModel(application) 
         store.removeExternalRepo(entry.repoFullName)
         store.removeManualRepo(entry.repoFullName)
         store.removeCustomEntry(entry.repoFullName)
-        updateEntries { list ->
-            list.filterNot { it.repoFullName.equals(entry.repoFullName, ignoreCase = true) }
+        _ui.update { state ->
+            state.copy(
+                entries = state.entries.filterNot { it.repoFullName.equals(entry.repoFullName, ignoreCase = true) },
+                savedExternalLower = currentSavedExternalLower(),
+            )
         }
     }
 
@@ -542,12 +695,27 @@ class MarketViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun updateEntries(transform: (List<AppEntry>) -> List<AppEntry>) {
-        _ui.update { it.copy(entries = transform(it.entries)) }
+        _ui.update {
+            it.copy(
+                entries = transform(it.entries),
+                savedExternalLower = currentSavedExternalLower(),
+            )
+        }
     }
 
     private fun updateEntry(repoFullName: String, transform: (AppEntry) -> AppEntry) {
-        updateEntries { entries ->
-            sortEntries(entries.map { if (it.repoFullName.equals(repoFullName, ignoreCase = true)) transform(it) else it })
+        _ui.update { state ->
+            state.copy(
+                entries = sortEntries(
+                    state.entries.map {
+                        if (it.repoFullName.equals(repoFullName, ignoreCase = true)) transform(it) else it
+                    }
+                ),
+                githubSearchResults = state.githubSearchResults.map {
+                    if (it.repoFullName.equals(repoFullName, ignoreCase = true)) transform(it) else it
+                },
+                savedExternalLower = currentSavedExternalLower(),
+            )
         }
     }
 

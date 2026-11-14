@@ -30,7 +30,12 @@
     <string name="token_label">GitHub token (pro vyšší limit a soukromá repa)</string>
     <string name="owner_label">GitHub účet</string>
     <string name="scanning">Skenuji všechna repozitáře z GitHubu…</string>
+    <string name="searching_github">Hledám repozitáře na GitHubu…</string>
     <string name="search_hint">Hledat aplikaci, web nebo repozitář…</string>
+    <string name="search_hint_external">Klíčová slova pro hledání na GitHubu…</string>
+    <string name="search_github_btn">Hledat</string>
+    <string name="save_external_btn">📌 Uložit do Cizích</string>
+    <string name="saved_external_badge">✓ ULOŽENO V CIZÍCH</string>
     <string name="section_apk">1. APK</string>
     <string name="section_web">2. Web App</string>
     <string name="section_external">3. Cizí</string>

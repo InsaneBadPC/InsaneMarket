@@ -12,6 +12,8 @@ import android.view.Menu
 import android.view.MenuItem
 import android.view.View
 import android.view.ViewGroup
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
@@ -87,6 +89,18 @@ class MainActivity : AppCompatActivity() {
 
         adapter = AppAdapter(
             currentSection = { section },
+            isSavedExternal = { entry ->
+                lastState?.savedExternalLower?.contains(entry.repoFullName.lowercase()) == true
+            },
+            onSaveExternal = { entry ->
+                viewModel.saveExternalFromSearch(entry) { saved ->
+                    Toast.makeText(
+                        this,
+                        "Repozitář „${saved.displayName}“ uložen do Cizích.",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
+            },
             onAction = ::onAction,
             onOpen = ::onOpen,
             onOpenWeb = ::onOpenWeb,
@@ -101,7 +115,24 @@ class MainActivity : AppCompatActivity() {
 
         b.searchInput.doAfterTextChanged {
             query = it?.toString().orEmpty()
-            lastState?.let(::render)
+            if (query.isBlank() && lastState?.githubSearchQuery?.isNotBlank() == true) {
+                viewModel.clearGitHubSearch()
+            } else {
+                lastState?.let(::render)
+            }
+        }
+
+        b.searchInput.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_SEARCH) {
+                triggerGitHubSearchIfExternal()
+                true
+            } else {
+                false
+            }
+        }
+
+        b.btnSearchGitHub.setOnClickListener {
+            triggerGitHubSearchIfExternal()
         }
 
         b.sectionTabs.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
@@ -212,12 +243,34 @@ class MainActivity : AppCompatActivity() {
         else -> super.onOptionsItemSelected(item)
     }
 
+    private fun triggerGitHubSearchIfExternal() {
+        hideKeyboard()
+        if (section == MarketSection.EXTERNAL) {
+            if (query.isBlank()) {
+                Toast.makeText(this, "Zadej klíčová slova pro hledání na GitHubu.", Toast.LENGTH_SHORT).show()
+            } else {
+                viewModel.searchGitHub(query)
+            }
+        } else {
+            lastState?.let(::render)
+        }
+    }
+
+    private fun hideKeyboard() {
+        val imm = getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager
+        currentFocus?.windowToken?.let { imm?.hideSoftInputFromWindow(it, 0) }
+    }
+
     private fun updateFabLabel() {
         b.fabAdd.text = when (section) {
             MarketSection.APK -> "+ Přidat APK / Repo"
             MarketSection.WEB -> "+ Přidat Web App"
             MarketSection.EXTERNAL -> "+ Přidat Cizí Repo"
         }
+        b.btnSearchGitHub.visibility = if (section == MarketSection.EXTERNAL) View.VISIBLE else View.GONE
+        b.searchInput.hint = getString(
+            if (section == MarketSection.EXTERNAL) R.string.search_hint_external else R.string.search_hint
+        )
     }
 
     private fun matchesSection(entry: AppEntry, targetSection: MarketSection): Boolean = when (targetSection) {
@@ -239,38 +292,72 @@ class MainActivity : AppCompatActivity() {
         b.sectionTabs.getTabAt(2)?.text = "📦 Cizí ($extCount)"
         b.filterHidden.text = if (hiddenCount > 0) "Skryté ($hiddenCount)" else getString(R.string.filter_hidden)
 
-        val visible = state.entries
-            .filter { entry ->
-                matchesSection(entry, section) &&
-                    entry.matches(query) &&
+        val showingGitHubSearch = section == MarketSection.EXTERNAL &&
+            query.isNotBlank() &&
+            (state.searchingGitHub || state.githubSearchQuery.isNotBlank())
+
+        val visible = if (showingGitHubSearch) {
+            state.githubSearchResults
+                .filter { entry ->
                     when (filter) {
                         Filter.ALL -> !entry.isHidden
                         Filter.UPDATES -> !entry.isHidden && entry.hasUpdate
                         Filter.INSTALLED -> !entry.isHidden && entry.isInstalled
                         Filter.HIDDEN -> entry.isHidden
                     }
-            }
-            .sortedWith(
-                compareByDescending<AppEntry> { it.userRating }
-                    .thenByDescending { it.hasUpdate }
-                    .thenByDescending { it.publishedAt ?: "" }
-                    .thenBy { it.displayName.lowercase() }
-            )
+                }
+                .sortedWith(
+                    compareByDescending<AppEntry> { it.userRating }
+                        .thenByDescending { it.starsCount }
+                        .thenByDescending { it.publishedAt ?: "" }
+                        .thenBy { it.displayName.lowercase() }
+                )
+        } else {
+            state.entries
+                .filter { entry ->
+                    matchesSection(entry, section) &&
+                        entry.matches(query) &&
+                        when (filter) {
+                            Filter.ALL -> !entry.isHidden
+                            Filter.UPDATES -> !entry.isHidden && entry.hasUpdate
+                            Filter.INSTALLED -> !entry.isHidden && entry.isInstalled
+                            Filter.HIDDEN -> entry.isHidden
+                        }
+                }
+                .sortedWith(
+                    compareByDescending<AppEntry> { it.userRating }
+                        .thenByDescending { it.hasUpdate }
+                        .thenByDescending { it.publishedAt ?: "" }
+                        .thenBy { it.displayName.lowercase() }
+                )
+        }
 
         adapter.submitList(visible)
-        b.statusText.text = buildStatus(state, visible.size)
-        b.progress.visibility = if (state.scanning) View.VISIBLE else View.GONE
+        b.statusText.text = buildStatus(state, visible.size, showingGitHubSearch)
+        b.progress.visibility = if (state.scanning || state.searchingGitHub) View.VISIBLE else View.GONE
         b.progress.isIndeterminate = true
         if (!state.scanning) b.swipe.isRefreshing = false
 
         if (visible.isEmpty()) {
             val filtered = query.isNotBlank() || filter != Filter.ALL
             when {
+                state.searchingGitHub -> showState(
+                    getString(R.string.searching_github),
+                    "Prohledávám názvy, popisy a README na GitHubu pro „${state.githubSearchQuery}“…",
+                )
                 state.error != null && !filtered -> showState(getString(R.string.error_title), state.error)
+                showingGitHubSearch -> showState(
+                    getString(R.string.nothing_found),
+                    "Na GitHubu nebyl nalezen žádný repozitář odpovídající „${state.githubSearchQuery}“.",
+                )
+                filtered && section == MarketSection.EXTERNAL && query.isNotBlank() -> showState(
+                    "Prohledat celý GitHub?",
+                    "Ve tvých uložených Cizích repozitářích nic neodpovídá „$query“. Klepni nahoře na tlačítko „Hledat“ pro vyhledání na celém GitHubu.",
+                )
                 filtered -> showState(getString(R.string.nothing_found), getString(R.string.nothing_found_body))
                 section == MarketSection.EXTERNAL -> showState(
                     "Žádné cizí repozitáře",
-                    "Přidej libovolný GitHub repozitář klepnutím na „+ Přidat Cizí Repo“ a prozkoumej jeho soubory, vydání a Pages.",
+                    "Napiš nahoru klíčová slova a klepni na „Hledat“ pro vyhledání repozitářů na GitHubu, nebo přidej repo přes „+ Přidat Cizí Repo“.",
                 )
                 else -> showState(getString(R.string.empty_title), getString(R.string.empty_body))
             }
@@ -289,10 +376,18 @@ class MainActivity : AppCompatActivity() {
         maybeInstallPending()
     }
 
-    private fun buildStatus(state: MarketUiState, visibleCount: Int): String = buildString {
-        if (state.scanning) append(getString(R.string.scanning)).append(" • ")
-        append(getString(R.string.status_count, visibleCount))
-        if (state.lastScan > 0L) {
+    private fun buildStatus(state: MarketUiState, visibleCount: Int, showingGitHubSearch: Boolean = false): String = buildString {
+        if (state.searchingGitHub) {
+            append(getString(R.string.searching_github)).append(" • ")
+        } else if (state.scanning) {
+            append(getString(R.string.scanning)).append(" • ")
+        }
+        if (showingGitHubSearch && !state.searchingGitHub) {
+            append("GitHub hledání „${state.githubSearchQuery}“: $visibleCount nalezeno • řazeno podle ★")
+        } else {
+            append(getString(R.string.status_count, visibleCount))
+        }
+        if (state.lastScan > 0L && !showingGitHubSearch) {
             append(" • ").append(formatTime(state.lastScan))
         }
         if (state.rateRemaining != null) {
@@ -301,8 +396,8 @@ class MainActivity : AppCompatActivity() {
                 append(" (").append(formatTime(state.rateResetEpoch * 1000)).append(")")
             }
         }
-        if (state.fromCache) append(" • ").append(getString(R.string.status_cache))
-        if (state.failedRepos > 0) {
+        if (state.fromCache && !showingGitHubSearch) append(" • ").append(getString(R.string.status_cache))
+        if (state.failedRepos > 0 && !showingGitHubSearch) {
             append(" • ").append(getString(R.string.status_failed_repos, state.failedRepos))
         }
     }
@@ -733,12 +828,26 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        MaterialAlertDialogBuilder(this)
+        val isSavedExt = lastState?.savedExternalLower?.contains(entry.repoFullName.lowercase()) == true
+        val builder = MaterialAlertDialogBuilder(this)
             .setView(view)
             .setPositiveButton("GitHub") { _, _ -> openBrowserUrl(entry.repoUrl) }
-            .setNeutralButton(R.string.edit) { _, _ -> onEdit(entry) }
             .setNegativeButton("Zavřít", null)
-            .show()
+
+        if (entry.isExternal && !isSavedExt) {
+            builder.setNeutralButton(R.string.save_external_btn) { _, _ ->
+                viewModel.saveExternalFromSearch(entry) { saved ->
+                    Toast.makeText(
+                        this,
+                        "Repozitář „${saved.displayName}“ uložen do Cizích.",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
+            }
+        } else {
+            builder.setNeutralButton(R.string.edit) { _, _ -> onEdit(entry) }
+        }
+        builder.show()
     }
 
     private fun addSectionTitle(parent: LinearLayout, text: String) {

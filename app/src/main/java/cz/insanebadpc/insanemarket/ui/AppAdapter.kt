@@ -15,6 +15,8 @@ import cz.insanebadpc.insanemarket.util.IconLoader
 
 class AppAdapter(
     private val currentSection: () -> MarketSection,
+    private val isSavedExternal: (AppEntry) -> Boolean,
+    private val onSaveExternal: (AppEntry) -> Unit,
     private val onAction: (AppEntry) -> Unit,
     private val onOpen: (AppEntry) -> Unit,
     private val onOpenWeb: (AppEntry) -> Unit,
@@ -66,7 +68,12 @@ class AppAdapter(
         // Platform & capability badges
         b.badgeApk.visibility = if (item.hasApk) View.VISIBLE else View.GONE
         b.badgeWeb.visibility = if (item.hasWebApp) View.VISIBLE else View.GONE
+        val savedInExternal = isSavedExternal(item)
         when {
+            item.isExternal && !savedInExternal -> {
+                b.badgeExtra.visibility = View.VISIBLE
+                b.badgeExtra.text = "🔍 GITHUB HLEDÁNÍ"
+            }
             item.isExternal -> {
                 b.badgeExtra.visibility = View.VISIBLE
                 b.badgeExtra.text = "📦 CIZÍ REPO"
@@ -159,6 +166,11 @@ class AppAdapter(
                 b.action.text = context.getString(R.string.explore_repo)
                 b.action.setOnClickListener { onDetails(item) }
                 when {
+                    !savedInExternal -> {
+                        b.webAction.visibility = View.VISIBLE
+                        b.webAction.text = context.getString(R.string.save_external_btn)
+                        b.webAction.setOnClickListener { onSaveExternal(item) }
+                    }
                     item.hasWebApp -> {
                         b.webAction.visibility = View.VISIBLE
                         b.webAction.text = context.getString(R.string.open_web)

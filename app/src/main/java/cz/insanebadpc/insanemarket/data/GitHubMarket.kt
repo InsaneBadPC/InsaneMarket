@@ -161,6 +161,40 @@ class GitHubMarket(
             ?: throw IllegalStateException("Repozitář $full se nepodařilo načíst.")
     }
 
+    suspend fun searchRepositories(query: String): List<AppEntry> = withContext(Dispatchers.IO) {
+        val q = query.trim()
+        if (q.isBlank()) return@withContext emptyList()
+        val encoded = URLEncoder.encode("$q in:name,description,readme", "UTF-8")
+        val response = get("https://api.github.com/search/repositories?q=$encoded&per_page=30")
+        val root = JSONObject(response.body)
+        val items = root.optJSONArray("items") ?: JSONArray()
+        val out = mutableListOf<AppEntry>()
+        for (i in 0 until items.length()) {
+            val repo = items.optJSONObject(i) ?: continue
+            val entry = MarketParser.parseRepo(
+                repo = repo,
+                release = null,
+                metadata = null,
+                tree = null,
+                readmeText = null,
+                requireApkOnly = false,
+                allowEmpty = true,
+                isExternal = true,
+                isManual = false,
+            ) ?: continue
+            val topicsArr = repo.optJSONArray("topics")
+            if (topicsArr != null && topicsArr.length() > 0) {
+                val topics = (0 until minOf(topicsArr.length(), 5))
+                    .mapNotNull { idx -> topicsArr.optString(idx).takeIf { it.isNotBlank() } }
+                if (topics.isNotEmpty()) {
+                    entry.description = "${entry.description}\n🏷 ${topics.joinToString(", ")}"
+                }
+            }
+            out.add(entry)
+        }
+        out
+    }
+
     suspend fun fetchRepoDetails(repoFullName: String): RepoDetailedInfo = withContext(Dispatchers.IO) {
         val full = parseRepoFullName(repoFullName) ?: repoFullName
         val repo = JSONObject(get("https://api.github.com/repos/$full").body)
