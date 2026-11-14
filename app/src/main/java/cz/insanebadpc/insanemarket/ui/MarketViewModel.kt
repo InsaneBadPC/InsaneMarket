@@ -496,6 +496,7 @@ class MarketViewModel(application: Application) : AndroidViewModel(application) 
                 knownTag = known?.tag,
                 knownVersionCode = known?.versionCode,
                 latestTag = entry.latestTag,
+                installedVersionName = info?.versionName,
             )
             decision.learnedTag?.let { store.setInstalledTag(entry.repoFullName, it) }
 

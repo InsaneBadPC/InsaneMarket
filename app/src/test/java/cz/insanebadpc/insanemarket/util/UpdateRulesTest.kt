@@ -83,4 +83,40 @@ class UpdateRulesTest {
         assertFalse(decision.hasUpdate)
         assertEquals(null, decision.learnedTag)
     }
+
+    @Test
+    fun versionNameDetectsUpdateEvenWithoutInstalledTag() {
+        val decision = UpdateRules.decide(
+            installedVersionCode = 9,
+            installedTag = null,
+            knownTag = null,
+            knownVersionCode = null,
+            latestTag = "app-v0.3.11",
+            installedVersionName = "0.3.9",
+        )
+        assertTrue(decision.hasUpdate)
+    }
+
+    @Test
+    fun versionNameSameOrNewerDoesNotClaimUpdate() {
+        val same = UpdateRules.decide(
+            installedVersionCode = 11,
+            installedTag = null,
+            knownTag = null,
+            knownVersionCode = null,
+            latestTag = "app-v0.3.11",
+            installedVersionName = "0.3.11",
+        )
+        assertFalse(same.hasUpdate)
+
+        val newer = UpdateRules.decide(
+            installedVersionCode = 12,
+            installedTag = null,
+            knownTag = null,
+            knownVersionCode = null,
+            latestTag = "app-v0.3.11",
+            installedVersionName = "0.3.12",
+        )
+        assertFalse(newer.hasUpdate)
+    }
 }
